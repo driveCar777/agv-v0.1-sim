@@ -31,6 +31,12 @@ ALIGN_MAX_S = 6.0
 TURN_MAX_S = 8.0
 REPOSITION_MAX_S = 4.0
 REVERSE_EVAL_S = 0.9  # early abort check
+# STEP 3F-CORRECTIVE — recovery reverse must move, not spin
+RECOVERY_MOVE_TIMEOUT_S = 3.5
+RECOVERY_STALL_S = 1.25
+RECOVERY_MIN_PROGRESS_M = 0.12
+POLICY_REVERSE_VX = -0.12
+POLICY_REVERSE_W = 0.0
 
 # Modes
 IDLE = "IDLE"
@@ -51,8 +57,8 @@ LOCAL_RIGHT = "LOCAL_RIGHT"
 PHASE_MAP = {
     FORWARD_TRACK: "forward",
     FORWARD_TURN: "forward",
-    LOCAL_LEFT: "forward",
-    LOCAL_RIGHT: "forward",
+    LOCAL_LEFT: "local_avoid",
+    LOCAL_RIGHT: "local_avoid",
     ALIGN: "align",
     TURN_IN_PLACE: "turn_in_place",
     REPOSITION: "reposition",
@@ -144,6 +150,11 @@ class ManeuverDecision:
     legacy_phase: str = "forward"
     decision: str = "FORWARD"
     local_compare: Optional[Dict[str, Any]] = None
+    policy_state: str = ""
+    policy_behavior: str = ""
+    corridor_half_width: float = 0.3
+    path_follow_weight: float = 5.0
+    recovery_exec: Optional[Dict[str, Any]] = None
 
 
 def find_best_path_capture(
@@ -330,6 +341,19 @@ class ManeuverFSM:
 
         self.local_selector = LocalManeuverSelector()
         self.decision_label = "FORWARD"
+        # STEP 3F-CORRECTIVE: longitudinal recovery progress (not yaw)
+        self._recovery_start_pose: Optional[Tuple[float, float, float]] = None
+        self._recovery_exec: Dict[str, Any] = {
+            "status": "NONE",
+            "action": "NONE",
+            "signed_progress_m": 0.0,
+            "distance_since_start_m": 0.0,
+            "target_distance_m": 1.0,
+            "target_remaining_m": 1.0,
+            "stall_s": 0.0,
+            "tracker": "TEMPORARY_REVERSE_TRACKER",
+        }
+        self._recovery_stall_since: Optional[float] = None
 
     def reset(self) -> None:
         self.mode = IDLE
@@ -341,6 +365,18 @@ class ManeuverFSM:
         self.history = []
         self.decision_label = "FORWARD"
         self.local_selector.reset()
+        self._recovery_start_pose = None
+        self._recovery_stall_since = None
+        self._recovery_exec = {
+            "status": "NONE",
+            "action": "NONE",
+            "signed_progress_m": 0.0,
+            "distance_since_start_m": 0.0,
+            "target_distance_m": 1.0,
+            "target_remaining_m": 1.0,
+            "stall_s": 0.0,
+            "tracker": "TEMPORARY_REVERSE_TRACKER",
+        }
 
     def _set_mode(self, mode: str, now: float, reason: str) -> None:
         if mode != self.mode:
@@ -377,7 +413,32 @@ class ManeuverFSM:
         collide: Optional[CollideFn] = None,
         actual_clearance: float = 1.0,
         nav_active: bool = True,
+        policy_ctx: Optional[Dict[str, Any]] = None,
+        dynamic_short: bool = False,
     ) -> ManeuverDecision:
+        pol = policy_ctx or {}
+        allow_side = bool(pol.get("allow_side_compare", True))
+        allow_replan = bool(pol.get("allow_replan", True))
+        allow_recovery = bool(pol.get("allow_recovery", True))
+        require_capture_hard = bool(pol.get("require_capture_hard", True))
+        path_follow_weight = float(pol.get("path_follow_weight", 5.0))
+        policy_state = str(pol.get("state") or "")
+        policy_behavior = str(pol.get("behavior") or "")
+        corridor_hw = float(pol.get("max_deviation_m") or 0.3)
+        commitment_active = bool(pol.get("commitment_active", False))
+        committed_side = str(pol.get("committed_side") or "NONE")
+        side_switch_authorized = bool(pol.get("side_switch_authorized", False))
+        commitment_hard_fail = bool(pol.get("commitment_hard_fail", False))
+        authorized_side = str(pol.get("authorized_side") or "").upper()
+        if authorized_side not in ("LEFT", "RIGHT"):
+            authorized_side = ""
+        recovery_action = str(pol.get("recovery_action") or "NONE").upper()
+        recovery_target_m = float(pol.get("recovery_target_distance_m") or 1.0)
+        recovery_force_vx = float(pol.get("recovery_force_vx") or POLICY_REVERSE_VX)
+        recovery_force_w = float(pol.get("recovery_force_w") or POLICY_REVERSE_W)
+        # While committed, still evaluate L/R feasibility even if allow_side_compare=False
+        eval_sides = allow_side or commitment_active
+        prev_mode_for_switch = self.mode
         if emergency or not nav_active:
             self._set_mode(IDLE if not nav_active else SAFE_STOP, now, "emergency" if emergency else "idle")
             cap = PathCapture(available=False)
@@ -466,16 +527,112 @@ class ManeuverFSM:
         reason = fwd.reason
         mode = self.mode
 
+        policy_wants_reverse = (
+            allow_recovery
+            and recovery_action in ("LOCAL_REVERSE", "HISTORICAL_RETREAT")
+            and recovery_attempts < MAX_RECOVERY_ATTEMPTS
+            and rear_near > DEFAULT_GEOM.rear_stop_m + 0.08
+        )
+
+        def _signed_reverse_progress(px: float, py: float, pyaw: float) -> Tuple[float, float]:
+            """Body-longitudinal retreat (+ = moved opposite heading from start)."""
+            if self._recovery_start_pose is None:
+                return 0.0, 0.0
+            sx, sy, syaw = self._recovery_start_pose
+            dx, dy = px - sx, py - sy
+            # Displacement projected onto -heading(start) = backward body axis at start
+            back_x = -math.cos(syaw)
+            back_y = -math.sin(syaw)
+            signed = dx * back_x + dy * back_y
+            dist = math.hypot(dx, dy)
+            return signed, dist
+
         # Active reverse evaluation / early abort
         reverse_aborting = False
+        skip_fresh = False
         if self.mode == REVERSE_ESCAPE and self.reverse_before is not None:
             dt_rev = self.time_in_mode(now)
+            if self._recovery_start_pose is None:
+                self._recovery_start_pose = (
+                    float(self.reverse_before.pose[0]),
+                    float(self.reverse_before.pose[1]),
+                    float(self.reverse_before.theta),
+                )
+            signed_prog, dist_prog = _signed_reverse_progress(x, y, yaw)
+            tgt = max(0.35, min(2.5, recovery_target_m))
+            remaining = max(0.0, tgt - signed_prog)
+            self._recovery_exec.update(
+                {
+                    "status": "EXECUTING" if signed_prog < RECOVERY_MIN_PROGRESS_M else "PROGRESSING",
+                    "action": recovery_action or "LOCAL_REVERSE",
+                    "signed_progress_m": round(signed_prog, 3),
+                    "distance_since_start_m": round(dist_prog, 3),
+                    "target_distance_m": round(tgt, 3),
+                    "target_remaining_m": round(remaining, 3),
+                    "stall_s": 0.0,
+                    "tracker": "TEMPORARY_REVERSE_TRACKER",
+                }
+            )
+            # Stall: no longitudinal progress while supposedly reversing
+            if signed_prog < RECOVERY_MIN_PROGRESS_M * 0.5:
+                if self._recovery_stall_since is None:
+                    self._recovery_stall_since = now
+                stall_s = now - float(self._recovery_stall_since)
+                self._recovery_exec["stall_s"] = round(stall_s, 2)
+            else:
+                self._recovery_stall_since = None
+                self._recovery_exec["stall_s"] = 0.0
+
             clr_delta = actual_clearance - float(self.reverse_before.actual_clearance)
             prog_delta = path_progress - float(self.reverse_before.path_progress)
             herr_delta = abs(herr) - abs(float(self.reverse_before.heading_error))
-            if dt_rev >= REVERSE_EVAL_S:
+
+            if policy_wants_reverse or recovery_action in ("LOCAL_REVERSE", "HISTORICAL_RETREAT"):
+                # Policy reverse: progress = signed longitudinal only (yaw ≠ success)
+                if signed_prog >= tgt * 0.85 or (signed_prog >= RECOVERY_MIN_PROGRESS_M and front_near > DEFAULT_GEOM.front_stop_m + 0.25):
+                    self.reverse_after = {
+                        "result": "SUCCESS",
+                        "signed_progress_m": round(signed_prog, 3),
+                        "duration_s": round(dt_rev, 2),
+                    }
+                    self._recovery_exec["status"] = "SUCCESS"
+                    reverse_aborting = True
+                    mode = POST_TURN
+                    reason = "RECOVERY_STEP_COMPLETE"
+                    decision_label = "FORWARD"
+                    skip_fresh = True
+                elif self._recovery_exec.get("stall_s", 0) >= RECOVERY_STALL_S and dt_rev >= RECOVERY_STALL_S:
+                    self.reverse_after = {
+                        "result": "STALLED",
+                        "signed_progress_m": round(signed_prog, 3),
+                        "duration_s": round(dt_rev, 2),
+                    }
+                    self._recovery_exec["status"] = "STALLED"
+                    reverse_aborting = True
+                    mode = SAFE_STOP if not allow_replan else REPLAN
+                    reason = "RECOVERY_EXECUTION_STUCK"
+                    decision_label = "REPLAN"
+                    skip_fresh = True
+                elif dt_rev >= RECOVERY_MOVE_TIMEOUT_S and signed_prog < RECOVERY_MIN_PROGRESS_M:
+                    self.reverse_after = {
+                        "result": "FAILED",
+                        "signed_progress_m": round(signed_prog, 3),
+                        "duration_s": round(dt_rev, 2),
+                    }
+                    self._recovery_exec["status"] = "FAILED"
+                    reverse_aborting = True
+                    mode = SAFE_STOP if not allow_replan else REPLAN
+                    reason = "RECOVERY_EXECUTION_FAILED"
+                    decision_label = "REPLAN"
+                    skip_fresh = True
+                else:
+                    # Keep reversing — do not fall into TURN/REPOSITION
+                    mode = REVERSE_ESCAPE
+                    reason = f"POLICY_RECOVERY|{recovery_action or 'LOCAL_REVERSE'}"
+                    decision_label = "REVERSE"
+                    skip_fresh = True
+            elif dt_rev >= REVERSE_EVAL_S:
                 if clr_delta < -0.08 or (prog_delta < 0.02 and herr_delta > 0.15):
-                    # reverse worsening → abort to align/replan
                     self.reverse_after = {
                         "result": "WORSE",
                         "clearance_delta": round(clr_delta, 3),
@@ -484,27 +641,20 @@ class ManeuverFSM:
                         "duration_s": round(dt_rev, 2),
                     }
                     reverse_aborting = True
-                    if rot_safe and abs_h > H_FORWARD:
-                        mode = TURN_IN_PLACE if abs_h > H_ALIGN else ALIGN
-                        reason = "REVERSE_WORSENING→ALIGN"
-                    else:
-                        mode = REPLAN
-                        reason = "REVERSE_WORSENING→REPLAN"
-                elif clr_delta > 0.08 or abs_h < H_TURN:
+                    # Never endless TURN after reverse fail — reassess
+                    mode = REPLAN if allow_replan else SAFE_STOP
+                    reason = "REVERSE_WORSENING→REPLAN"
+                elif clr_delta > 0.08 or signed_prog >= RECOVERY_MIN_PROGRESS_M:
                     self.reverse_after = {
                         "result": "IMPROVED",
                         "clearance_delta": round(clr_delta, 3),
                         "progress_delta": round(prog_delta, 3),
-                        "heading_delta": round(herr_delta, 3),
+                        "signed_progress_m": round(signed_prog, 3),
                         "duration_s": round(dt_rev, 2),
                     }
                     reverse_aborting = True
-                    if abs_h > H_FORWARD and rot_safe:
-                        mode = TURN_IN_PLACE if abs_h > H_ALIGN else ALIGN
-                        reason = "REVERSE_IMPROVED→ALIGN"
-                    else:
-                        mode = POST_TURN
-                        reason = "REVERSE_IMPROVED→FORWARD"
+                    mode = POST_TURN
+                    reason = "REVERSE_IMPROVED→FORWARD"
                 elif dt_rev >= REVERSE_MAX_S:
                     self.reverse_after = {
                         "result": "NO_CHANGE",
@@ -517,8 +667,59 @@ class ManeuverFSM:
                     mode = REPLAN if recovery_attempts < MAX_RECOVERY_ATTEMPTS else SAFE_STOP
                     reason = "REVERSE_TIMEOUT"
 
+        # STEP 3F-CORRECTIVE: Policy LOCAL_REVERSE/HISTORICAL_RETREAT owns mode
+        # Must beat HEADING_ALIGN / STUCK→REPOSITION / TURN_IN_PLACE
+        if policy_wants_reverse and not reverse_aborting:
+            mode = REVERSE_ESCAPE
+            reason = f"POLICY_RECOVERY|{recovery_action}"
+            decision_label = "REVERSE"
+            skip_fresh = True
+            if self._recovery_start_pose is None or self.mode != REVERSE_ESCAPE:
+                self._recovery_start_pose = (x, y, yaw)
+                self._recovery_stall_since = None
+                self._recovery_exec.update(
+                    {
+                        "status": "PLANNED",
+                        "action": recovery_action,
+                        "signed_progress_m": 0.0,
+                        "distance_since_start_m": 0.0,
+                        "target_distance_m": round(max(0.35, min(2.5, recovery_target_m)), 3),
+                        "target_remaining_m": round(max(0.35, min(2.5, recovery_target_m)), 3),
+                        "stall_s": 0.0,
+                        "tracker": "TEMPORARY_REVERSE_TRACKER",
+                    }
+                )
+            else:
+                signed_prog, dist_prog = _signed_reverse_progress(x, y, yaw)
+                tgt = float(self._recovery_exec.get("target_distance_m") or recovery_target_m)
+                self._recovery_exec.update(
+                    {
+                        "status": "EXECUTING" if signed_prog < RECOVERY_MIN_PROGRESS_M else "PROGRESSING",
+                        "signed_progress_m": round(signed_prog, 3),
+                        "distance_since_start_m": round(dist_prog, 3),
+                        "target_remaining_m": round(max(0.0, tgt - signed_prog), 3),
+                    }
+                )
+        elif recovery_action == "SAFE_STOP" and not reverse_aborting:
+            # S2 / NO_ESCAPE: stop — never endless TURN
+            mode = SAFE_STOP
+            reason = "POLICY_RECOVERY|SAFE_STOP"
+            decision_label = "REPLAN"
+            skip_fresh = True
+            self._recovery_exec.update({"status": "FAILED", "action": "SAFE_STOP"})
+        elif recovery_action == "REPLAN" and not reverse_aborting and not policy_wants_reverse:
+            mode = REPLAN if allow_replan else SAFE_STOP
+            reason = "POLICY_RECOVERY|REPLAN"
+            decision_label = "REPLAN"
+            skip_fresh = True
+        elif not policy_wants_reverse and self.mode != REVERSE_ESCAPE:
+            if self._recovery_exec.get("status") not in ("SUCCESS", "FAILED", "STALLED"):
+                self._recovery_exec["status"] = "NONE"
+            self._recovery_start_pose = None
+            self._recovery_stall_since = None
+
         # Timeouts for align/turn/reposition
-        if self.mode in (ALIGN, TURN_IN_PLACE) and self.time_in_mode(now) > (
+        if (not skip_fresh) and self.mode in (ALIGN, TURN_IN_PLACE) and self.time_in_mode(now) > (
             TURN_MAX_S if self.mode == TURN_IN_PLACE else ALIGN_MAX_S
         ):
             if rot_safe is False:
@@ -527,22 +728,26 @@ class ManeuverFSM:
             else:
                 mode = REPLAN
                 reason = "TURN_TIMEOUT→REPLAN"
-        if self.mode == REPOSITION and self.time_in_mode(now) > REPOSITION_MAX_S:
+        if (not skip_fresh) and self.mode == REPOSITION and self.time_in_mode(now) > REPOSITION_MAX_S:
             mode = REPLAN
             reason = "REPOSITION_TIMEOUT"
 
         # Align / turn success → post turn → forward
-        if self.mode in (ALIGN, TURN_IN_PLACE, POST_TURN):
+        if (not skip_fresh) and self.mode in (ALIGN, TURN_IN_PLACE, POST_TURN):
             if abs_h <= ALIGN_TOL and capture.available and capture.distance <= PATH_CAPTURE_TOL_M + 0.4:
                 mode = FORWARD_TRACK if self.mode == POST_TURN else POST_TURN
                 reason = "ALIGN_OK" if self.mode != POST_TURN else "CAPTURE_OK"
 
         local_compare_tel: Optional[Dict[str, Any]] = None
-        decision_label = self.decision_label
+        if not skip_fresh:
+            decision_label = self.decision_label
+        # else: decision_label already set by policy reverse / abort paths
 
-        # Local LEFT/RIGHT comparison when corridor stressed (not for large heading align)
+        # Local LEFT/RIGHT comparison when corridor stressed AND policy allows
         need_side_compare = (
-            not reverse_aborting
+            (not skip_fresh)
+            and eval_sides
+            and not reverse_aborting
             and abs_h <= H_ALIGN
             and self.mode
             in (
@@ -560,11 +765,14 @@ class ManeuverFSM:
                 or front_near < DEFAULT_GEOM.front_cost_m + 0.45
                 or self.mode in (LOCAL_LEFT, LOCAL_RIGHT)
                 or self.local_selector.current in ("LEFT", "RIGHT")
+                or policy_behavior in ("AVOID_LEFT", "AVOID_RIGHT", "CAUTION")
+                or policy_state in ("LOCAL_AVOID", "OBSTACLE_APPROACH")
+                or commitment_active
             )
         )
 
         # Fresh decision when idle/forward/recover-like
-        if (not reverse_aborting) and (
+        if (not skip_fresh) and (not reverse_aborting) and (
             mode
             in (
                 IDLE,
@@ -580,9 +788,14 @@ class ManeuverFSM:
         ):
             if collision and rear_near > DEFAULT_GEOM.rear_stop_m + 0.2:
                 if not rot_safe and front_near < DEFAULT_GEOM.front_stop_m + 0.15:
-                    mode = REVERSE_ESCAPE
-                    reason = "COLLISION_TRAP"
-                    decision_label = "REVERSE"
+                    if allow_recovery and recovery_attempts < MAX_RECOVERY_ATTEMPTS:
+                        mode = REVERSE_ESCAPE
+                        reason = "COLLISION_TRAP"
+                        decision_label = "REVERSE"
+                    else:
+                        mode = SAFE_STOP
+                        reason = "COLLISION_TRAP_NO_RECOVERY"
+                        decision_label = "REPLAN"
                 elif rot_safe:
                     mode = TURN_IN_PLACE if abs_h > H_ALIGN else ALIGN
                     reason = "COLLISION→ALIGN"
@@ -592,11 +805,14 @@ class ManeuverFSM:
                     reason = "COLLISION_NO_ESCAPE"
                     decision_label = "REPLAN"
             elif (
-                front_near < DEFAULT_GEOM.front_cost_m + 0.45
-                and abs_h <= (H_ALIGN + 0.55)
+                eval_sides
+                and (
+                    front_near < DEFAULT_GEOM.front_cost_m + 0.45
+                    and abs_h <= (H_ALIGN + 0.55)
+                )
             ) or need_side_compare:
-                # Front corridor stressed: compare LEFT/RIGHT before ALIGN
-                dyn = False
+                # Front corridor stressed: compare LEFT/RIGHT before ALIGN (policy-gated)
+                dyn = bool(dynamic_short)
                 cmp = self.local_selector.compare(
                     now=now,
                     x=x,
@@ -614,6 +830,14 @@ class ManeuverFSM:
                     right_free=right_free,
                     dynamic_short=dyn,
                     force=False,
+                    require_capture=require_capture_hard,
+                    max_deviation_m=corridor_hw,
+                    path_follow_scale=path_follow_weight / 5.0,
+                    commitment_active=commitment_active,
+                    committed_side=committed_side if committed_side in ("LEFT", "RIGHT") else None,
+                    side_switch_authorized=side_switch_authorized,
+                    commitment_hard_fail=commitment_hard_fail,
+                    authorized_side=authorized_side or None,
                 )
                 local_compare_tel = cmp.to_telemetry()
                 sel = cmp.selected
@@ -629,11 +853,32 @@ class ManeuverFSM:
                     mode = FORWARD_TRACK if fwd.feasible else FORWARD_TURN
                     reason = f"LOCAL|{cmp.reason}"
                 elif sel == "LEFT":
-                    mode = LOCAL_LEFT
-                    reason = f"LOCAL_LEFT|{cmp.reason}"
+                    # STEP 3E: committed RIGHT cannot become LEFT without authorization
+                    if (
+                        commitment_active
+                        and committed_side == "RIGHT"
+                        and not side_switch_authorized
+                    ):
+                        mode = LOCAL_RIGHT
+                        reason = "AUTH_GATE_BLOCK_LEFT"
+                        decision_label = "RIGHT"
+                        self.local_selector.current = "RIGHT"
+                    else:
+                        mode = LOCAL_LEFT
+                        reason = f"LOCAL_LEFT|{cmp.reason}"
                 elif sel == "RIGHT":
-                    mode = LOCAL_RIGHT
-                    reason = f"LOCAL_RIGHT|{cmp.reason}"
+                    if (
+                        commitment_active
+                        and committed_side == "LEFT"
+                        and not side_switch_authorized
+                    ):
+                        mode = LOCAL_LEFT
+                        reason = "AUTH_GATE_BLOCK_RIGHT"
+                        decision_label = "LEFT"
+                        self.local_selector.current = "LEFT"
+                    else:
+                        mode = LOCAL_RIGHT
+                        reason = f"LOCAL_RIGHT|{cmp.reason}"
                 elif sel == "ALIGN":
                     mode = ALIGN if rot_safe else REPOSITION
                     reason = f"LOCAL|{cmp.reason}"
@@ -644,15 +889,20 @@ class ManeuverFSM:
                     mode = WAIT_FOR_CLEARANCE
                     reason = f"LOCAL|{cmp.reason}"
                 elif sel == "REVERSE":
-                    if recovery_attempts < MAX_RECOVERY_ATTEMPTS:
+                    if allow_recovery and recovery_attempts < MAX_RECOVERY_ATTEMPTS:
                         mode = REVERSE_ESCAPE
                         reason = f"LOCAL|{cmp.reason}"
                     else:
-                        mode = SAFE_STOP
-                        reason = "LOCAL_REVERSE_EXHAUSTED"
+                        mode = REPLAN if allow_replan else SAFE_STOP
+                        reason = "LOCAL_REVERSE_BLOCKED_BY_POLICY"
                 else:
-                    mode = REPLAN
+                    mode = REPLAN if allow_replan else WAIT_FOR_CLEARANCE
                     reason = f"LOCAL|{cmp.reason}"
+                # Stash switch intent for Policy consume (nav_models reads via policy_ctx callback fields)
+                if local_compare_tel is not None and isinstance(local_compare_tel, dict):
+                    local_compare_tel["prev_mode"] = prev_mode_for_switch
+                    local_compare_tel["authorized_side"] = authorized_side or None
+                    local_compare_tel["side_switch_authorized"] = side_switch_authorized
             elif fwd.maneuver_required == "ALIGN_REQUIRED" or abs_h > H_ALIGN:
                 if rot_safe:
                     mode = TURN_IN_PLACE if abs_h > (H_ALIGN + 0.25) else ALIGN
@@ -671,12 +921,16 @@ class ManeuverFSM:
                 reason = "FORWARD_OK"
                 decision_label = "FORWARD"
             elif front_near < DEFAULT_GEOM.front_stop_m and not rot_safe:
-                if rear_near > DEFAULT_GEOM.rear_stop_m + 0.15 and recovery_attempts < MAX_RECOVERY_ATTEMPTS:
+                if (
+                    allow_recovery
+                    and rear_near > DEFAULT_GEOM.rear_stop_m + 0.15
+                    and recovery_attempts < MAX_RECOVERY_ATTEMPTS
+                ):
                     mode = REVERSE_ESCAPE
                     reason = "DEAD_END_REVERSE"
                     decision_label = "REVERSE"
                 else:
-                    mode = SAFE_STOP
+                    mode = SAFE_STOP if not allow_replan else REPLAN
                     reason = "DEAD_END_NO_REAR"
             elif stuck_s >= 8.0:
                 if abs_h > H_FORWARD and rot_safe:
@@ -688,7 +942,8 @@ class ManeuverFSM:
                     reason = "STUCK→REPOSITION"
                     decision_label = "REPOSITION"
                 elif (
-                    front_near < DEFAULT_GEOM.front_stop_m
+                    allow_recovery
+                    and front_near < DEFAULT_GEOM.front_stop_m
                     and not rot_safe
                     and rear_near > DEFAULT_GEOM.rear_stop_m + 0.2
                     and recovery_attempts < MAX_RECOVERY_ATTEMPTS
@@ -697,11 +952,11 @@ class ManeuverFSM:
                     reason = "STUCK→REVERSE"
                     decision_label = "REVERSE"
                 else:
-                    mode = REPLAN
+                    mode = REPLAN if allow_replan else SAFE_STOP
                     reason = "STUCK→REPLAN"
                     decision_label = "REPLAN"
             elif not fwd.feasible and fwd.reason == "PATH_CAPTURE_UNREACHABLE":
-                mode = REPLAN
+                mode = REPLAN if allow_replan else WAIT_FOR_CLEARANCE
                 reason = "NO_PATH_CAPTURE_POINT"
                 decision_label = "REPLAN"
             else:
@@ -710,6 +965,13 @@ class ManeuverFSM:
                 decision_label = "FORWARD" if fwd.feasible else "WAIT"
             if reason_hint and mode in (ALIGN, TURN_IN_PLACE):
                 reason = f"{reason_hint}|{reason}"
+
+            # Policy PATH_RECAPTURE prefers POST_TURN when heading OK
+            if policy_state == "PATH_RECAPTURE" and mode in (FORWARD_TRACK, FORWARD_TURN, LOCAL_LEFT, LOCAL_RIGHT):
+                if abs_h <= H_ALIGN and capture.available:
+                    mode = POST_TURN
+                    reason = f"POLICY_RECAPTURE|{reason}"
+                    decision_label = "FORWARD"
 
         self.decision_label = decision_label
 
@@ -767,6 +1029,19 @@ class ManeuverFSM:
                 lc = (local_compare_tel["candidates"] or {}).get("RIGHT") or {}
             force_vx = float(lc.get("vx") or 0.14)
             force_w = -abs(float(lc.get("w") or 0.28))
+        elif self.mode == REVERSE_ESCAPE:
+            # TEMPORARY_REVERSE_TRACKER: follow Probe/recovery straight reverse (no arbitrary yaw)
+            force_vx = max(vx0, min(vx1, float(recovery_force_vx)))
+            if force_vx >= -0.04:
+                force_vx = max(vx0, min(vx1, POLICY_REVERSE_VX))
+            force_w = float(recovery_force_w)
+            if abs(force_w) > 0.05:
+                # Only allow small w if historical retreat supplies validated curvature later
+                force_w = max(-0.12, min(0.12, force_w))
+            else:
+                force_w = 0.0
+            if self._recovery_exec.get("status") in ("NONE", "PLANNED"):
+                self._recovery_exec["status"] = "EXECUTING"
         elif self.mode == REPOSITION:
             force_vx = 0.06 if front_free > 0.9 else -0.06
             force_w = 0.25 * self._reposition_dir
@@ -812,6 +1087,11 @@ class ManeuverFSM:
             legacy_phase=PHASE_MAP.get(self.mode, "forward"),
             decision=self.decision_label,
             local_compare=local_compare_tel,
+            policy_state=policy_state,
+            policy_behavior=policy_behavior,
+            corridor_half_width=corridor_hw,
+            path_follow_weight=path_follow_weight,
+            recovery_exec=dict(self._recovery_exec),
         )
         self.last_decision = d
         return d
@@ -895,5 +1175,8 @@ class ManeuverFSM:
                 "forward_reason": self.reverse_before.forward_reason,
             },
             "reverse_after": self.reverse_after,
+            "recovery_exec": dict(self._recovery_exec),
+            "force_vx": d.force_vx,
+            "force_w": d.force_w,
             "max_heading_change_horizon": round(max_heading_change_in_horizon(), 3),
         }

@@ -42,3 +42,6 @@ node_modules/
 
 # Requires gh auth scope 'workflow' to push; keep local for now
 .github/workflows/
+
+# LIVE traces (local debug dumps)
+docs/_phase4_trace/

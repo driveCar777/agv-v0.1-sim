@@ -200,8 +200,9 @@ class DiffDriveMppi:
         collide: CollideFn,
         front_near: float,
         front_cost_m: float,
+        path_follow_weight: float = 5.0,
     ) -> Tuple[float, str, Dict[str, Any]]:
-        """Return (cost, mode, debug_meta). Cost formula unchanged; meta is observability only."""
+        """Return (cost, mode, debug_meta). path_follow_weight from NavigationPolicy profile."""
         if len(path) < 2:
             return 1e6, "invalid", {"cost_breakdown": {}, "collision": True, "first_collision": None}
         cost = 0.0
@@ -225,7 +226,8 @@ class DiffDriveMppi:
             for p in path[::3]:
                 gdev += min(math.hypot(p[0] - g[0], p[1] - g[1]) for g in gpts)
             gdev /= max(1, len(path[::3]))
-        global_path_cost = 5.0 * gdev
+        w_path = max(0.5, float(path_follow_weight))
+        global_path_cost = w_path * gdev
         cost += global_path_cost
         sx, sy = path[0]
         ex, ey = path[-1]
@@ -352,8 +354,12 @@ class DiffDriveMppi:
         vx_max: Optional[float] = None,
         force_vx: Optional[float] = None,
         force_w: Optional[float] = None,
+        path_follow_weight: float = 5.0,
+        vx_scale: float = 1.0,
     ) -> MppiResult:
         mode = control_mode or get_control_mode()
+        self._path_follow_weight = float(path_follow_weight)
+        self._vx_scale = max(0.2, min(1.0, float(vx_scale)))
         # Maneuver-constrained action space (defaults to controller limits)
         a_vx_min = float(self.vx_min if vx_min is None else vx_min)
         a_vx_max = float(self.vx_max if vx_max is None else vx_max)
@@ -363,7 +369,7 @@ class DiffDriveMppi:
         a_vx_min = max(self.vx_min, a_vx_min)
         a_vx_max = min(self.vx_max, a_vx_max)
 
-        # ALIGN / TURN_IN_PLACE / LOCAL_LEFT / LOCAL_RIGHT: directed commands
+        # ALIGN / TURN_IN_PLACE / LOCAL_* / REVERSE_ESCAPE: directed commands
         mmode = (maneuver_mode or "").upper()
         if force_vx is not None and force_w is not None and mmode in (
             "ALIGN",
@@ -372,6 +378,7 @@ class DiffDriveMppi:
             "SAFE_STOP",
             "LOCAL_LEFT",
             "LOCAL_RIGHT",
+            "REVERSE_ESCAPE",
         ):
             vx_cmd = float(force_vx)
             w_cmd = float(force_w)
@@ -383,6 +390,11 @@ class DiffDriveMppi:
             elif mmode == "LOCAL_RIGHT":
                 vx_cmd = max(0.04, vx_cmd)
                 w_cmd = -abs(w_cmd)
+            elif mmode == "REVERSE_ESCAPE":
+                # Straight reverse tracker — never invent large yaw
+                vx_cmd = min(-0.04, vx_cmd)
+                if abs(w_cmd) > 0.12:
+                    w_cmd = max(-0.12, min(0.12, w_cmd))
             self._cmd_vx, self._cmd_w = vx_cmd, w_cmd
             reverse = vx_cmd < -0.05
             band = kinematic_band(
@@ -398,6 +410,7 @@ class DiffDriveMppi:
                 "model_dt": 0.1,
                 "horizon_s": 1.2,
                 "maneuver_mode": mmode,
+                "tracker": "TEMPORARY_REVERSE_TRACKER" if mmode == "REVERSE_ESCAPE" else None,
             }
             return MppiResult(
                 vx=float(vx_cmd),
@@ -488,6 +501,7 @@ class DiffDriveMppi:
                 collide,
                 front_near,
                 self.geom.front_cost_m,
+                path_follow_weight=getattr(self, "_path_follow_weight", 5.0),
             )
             samples.append(
                 {
@@ -543,6 +557,11 @@ class DiffDriveMppi:
             vx_cmd = max(a_vx_min, min(a_vx_max, float(force_vx)))
         if force_w is not None and mmode == "REPOSITION":
             w_cmd = max(-self.wz_max, min(self.wz_max, float(force_w)))
+
+        # Policy CAUTION/AVOID: scale forward speed (never invent reverse)
+        if vx_cmd > 0.0:
+            vx_cmd *= getattr(self, "_vx_scale", 1.0)
+            vx_cmd = max(a_vx_min, min(a_vx_max, vx_cmd))
 
         self._cmd_vx, self._cmd_w = vx_cmd, w_cmd
         reverse = vx_cmd < -0.05

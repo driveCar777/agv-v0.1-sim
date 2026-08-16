@@ -19,6 +19,7 @@ from agv_bridge.nav_geometry import (
     REVERSE_MAX_S,
 )
 from agv_bridge.nav_incident import ApproachAnalyzer, IncidentRecorder, INCIDENT_TRIGGERS
+from agv_bridge.nav_phase4_telemetry import Phase4ObserveTracker, build_phase4_telemetry
 
 Pt = Tuple[float, float]
 
@@ -114,6 +115,11 @@ class EventRing:
             "RECOVERY_MADE_GEOMETRY_WORSE",
             "LATERAL_ERROR_DIVERGING",
             "STEERING_RESPONSE_WEAK",
+            "SIDE_SWITCH_OBSERVED",
+            "SIDE_SELECTED",
+            "FSM_TRANSITION",
+            "SAFETY_OVERRIDE",
+            "SAFETY_RELEASE",
         }
         if now - last2 < min_interval_s and event not in critical:
             return None
@@ -657,6 +663,7 @@ class NavDebugHub:
         self.detector = ExecutionEventDetector()
         self.incident = IncidentRecorder()
         self.approach = ApproachAnalyzer()
+        self.phase4 = Phase4ObserveTracker()
         self.debug_level = "ADVANCED"
         self.freeze = False
         self.frozen_snapshot: Optional[Dict[str, Any]] = None
@@ -730,6 +737,7 @@ class NavDebugHub:
         self.session_id = "NAV-" + datetime.now().strftime("%Y%m%d-%H%M%S")
         self.session_start = now
         self.session_end = None
+        self.phase4.reset(trace_id=f"phase4_{self.session_id}")
         self._stats = {"goal": {"x": goal[0], "y": goal[1]} if goal else None}
         self.events.push(
             "PLAN_STARTED",
@@ -764,6 +772,7 @@ class NavDebugHub:
         self.events.clear()
         self.telemetry.clear()
         self.pose_trace.clear()
+        self.phase4.reset(trace_id=None)
         self.detector.reset()
         self.approach.reset()
         self.incident.reset()
@@ -1254,10 +1263,12 @@ class NavDebugHub:
         cmd_w: Optional[float] = None,
         maneuver: Optional[Dict[str, Any]] = None,
         cmd_source: Optional[str] = None,
+        nav_policy: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         geom = DEFAULT_GEOM
         cands = list(candidates or [])
         man = dict(maneuver or {})
+        pol = dict(nav_policy or {})
         # Prefer Maneuver-layer forward feasibility when present
         man_fwd_ok = man.get("forward_feasible")
         man_fwd_reason = man.get("forward_reason")
@@ -1564,7 +1575,7 @@ class NavDebugHub:
                 "acc_v": geom.acc_v,
                 "acc_w": geom.acc_w,
             }
-            out["recovery"] = {
+            out["execution_recovery"] = {
                 "phase": phase,
                 "previous_phase": self.prev_phase,
                 "phase_enter_ts": self.phase_enter_ts,
@@ -1579,6 +1590,8 @@ class NavDebugHub:
                 "local_replan_count": local_replan_count,
                 "log": self._recovery_log[-3:],
             }
+            # Keep legacy alias until UI migrates; Phase4 overwrites `recovery` below
+            out["recovery"] = out["execution_recovery"]
 
         if level in ("ADVANCED", "FULL"):
             meta = mppi_meta or {}
@@ -1721,4 +1734,110 @@ class NavDebugHub:
             "history": man.get("local_history") or [],
             "snapshot": lc.get("snapshot") or {},
         }
+        # Navigation Policy / Behavior Supervisor
+        dec = pol.get("decision") or {}
+        corr = dec.get("corridor") or {}
+        prof = dec.get("profile") or {}
+        out["nav_policy"] = {
+            "state": pol.get("state") or dec.get("state") or "IDLE",
+            "behavior": pol.get("behavior") or dec.get("behavior") or "FOLLOW_GLOBAL",
+            "reason": pol.get("reason") or dec.get("reason") or "",
+            "scene": dec.get("scene") or (pol.get("decision") or {}).get("scene"),
+            "time_in_state": pol.get("time_in_state"),
+            "avoid_side": pol.get("avoid_side"),
+            "corridor": corr,
+            "profile": prof,
+            "path_follow_weight": dec.get("path_follow_weight"),
+            "max_deviation_m": dec.get("max_deviation_m") or corr.get("half_width"),
+            "local_deviation": corr.get("lateral_error"),
+            "allow_side_compare": dec.get("allow_side_compare"),
+            "allow_replan": dec.get("allow_replan"),
+            "allow_recovery": dec.get("allow_recovery"),
+            "history": pol.get("history") or [],
+            "events": pol.get("events") or [],
+            "loops": pol.get("loops") or {},
+            "flags": dec.get("flags") or {},
+            "commitment": pol.get("commitment") or {},
+            "commitment_active": dec.get("commitment_active"),
+            "committed_side": dec.get("committed_side"),
+            "commitment_phase": dec.get("commitment_phase"),
+            "commitment_hard_fail": dec.get("commitment_hard_fail"),
+            "side_switch_authorized": dec.get("side_switch_authorized"),
+            "side_switch_authorization_status": dec.get("side_switch_authorization_status"),
+            "probe": pol.get("probe") or {},
+            "probe_events": pol.get("probe_events") or [],
+            "side_switch": pol.get("side_switch") or {},
+            "switch_token": pol.get("switch_token"),
+            "recovery": pol.get("recovery") or {},
+            "physical_trajectory": pol.get("physical_trajectory") or {},
+            "breadcrumb": pol.get("breadcrumb") or {},
+        }
+        # ---- Phase 4 STEP 3B: observe-only telemetry (no decision changes) ----
+        try:
+            p4 = build_phase4_telemetry(
+                nav_policy=out["nav_policy"],
+                maneuver=man,
+                local_maneuver=out["local_maneuver"],
+                mppi_vx=mppi_vx,
+                mppi_w=mppi_w,
+                cmd_vx=cmd_vx_v,
+                cmd_w=cmd_w_v,
+                safe_vx=safe_vx,
+                safe_w=safe_w,
+                state_vx=state_vx,
+                state_w=state_w,
+                stop_reason=stop_reason,
+                front_near=front_near,
+                rear_near=rear_near,
+                phase=phase,
+                control_mode=control_mode,
+                stuck_s=stuck_s,
+                recovery_attempts=recovery_attempts,
+                tracker=self.phase4,
+                pose_ts=time.time(),
+                obstacle_ts=None,
+                session_id=self.session_id,
+            )
+            out["phase4"] = p4
+            # Stable top-level aliases (schema freeze for 3C+)
+            out["commitment"] = p4["commitment"]
+            out["probe"] = p4["probe"]
+            out["side_switch"] = p4["side_switch"]
+            out["recovery"] = p4.get("recovery") or {}
+            out["physical_trajectory"] = p4.get("physical_trajectory") or {}
+            out["breadcrumb"] = p4.get("breadcrumb") or {}
+            out["ownership"] = p4["ownership"]
+            out["sides"] = p4["sides"]
+            out["phase4_events"] = p4["events"]
+            out["performance"] = p4.get("performance") or {}
+            # Mirror only newly emitted observe events into main ring
+            for ev in getattr(self.phase4, "last_emitted", []) or []:
+                et = ev.get("event_type") or ev.get("event")
+                if not et:
+                    continue
+                self.events.push(
+                    str(et),
+                    {
+                        "source": ev.get("source"),
+                        "old_value": ev.get("old_value"),
+                        "new_value": ev.get("new_value"),
+                        "reason": ev.get("reason"),
+                        "metadata": ev.get("metadata") or {},
+                        "trace_id": ev.get("trace_id"),
+                        "category": "PHASE4",
+                    },
+                    min_interval_s=0.0,
+                    category="PHASE4",
+                )
+        except Exception as exc:
+            out["phase4"] = {
+                "schema_version": "phase4_step3b_v1",
+                "error": str(exc),
+                "commitment": {"implemented": False, "reason": "TELEMETRY_ERROR"},
+                "probe": {"implemented": False, "status": "NOT_IMPLEMENTED"},
+                "side_switch": {"implemented": False, "status": "NOT_IMPLEMENTED"},
+            }
+            out["commitment"] = out["phase4"]["commitment"]
+            out["probe"] = out["phase4"]["probe"]
+            out["side_switch"] = out["phase4"]["side_switch"]
         return out

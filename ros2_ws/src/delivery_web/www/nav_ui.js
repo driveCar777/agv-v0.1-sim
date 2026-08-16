@@ -617,6 +617,162 @@
           ]);
         });
       },
+      dbg_nav_policy(card) {
+        const body = card.querySelector(".widget-body");
+        throttleSnap(card, 200, (snap) => {
+          const p = snap.debug?.nav_policy || {};
+          const c = p.corridor || {};
+          const pr = p.profile || {};
+          body.innerHTML = kv([
+            ["state", p.state || "—"],
+            ["behavior", p.behavior || "—"],
+            ["reason", p.reason || "—"],
+            ["scene", p.scene || "—"],
+            ["corridor", `${fmt(c.half_width, 2)}m (${c.mode || "—"})`],
+            ["deviation", `${fmt(c.lateral_error ?? p.local_deviation, 2)} / ${fmt(p.max_deviation_m, 2)}`],
+            ["path_follow_w", fmt(p.path_follow_weight, 2)],
+            ["profile", pr.name || "—"],
+            ["compare/replan/rev", `${p.allow_side_compare ? "Y" : "n"} / ${p.allow_replan ? "Y" : "n"} / ${p.allow_recovery ? "Y" : "n"}`],
+          ]);
+        });
+      },
+      dbg_phase4_probe(card) {
+        const body = card.querySelector(".widget-body");
+        throttleSnap(card, 250, (snap) => {
+          const pr = snap.debug?.probe || snap.debug?.phase4?.probe || {};
+          const f = pr.forward || {};
+          const b = pr.backward || {};
+          const L = pr.left || {};
+          const R = pr.right || {};
+          const t = pr.turn_in_place || {};
+          const fmt = (r) => {
+            if (!r || !r.status) return "—";
+            const clr = r.min_clearance != null ? Number(r.min_clearance).toFixed(2) : "—";
+            const extra = r.soft_risk ? " soft" : "";
+            const reason = r.failure_reason && r.failure_reason !== "NONE" ? ` ${r.failure_reason}` : "";
+            return `${r.status} clr=${clr}${extra}${reason}`;
+          };
+          body.innerHTML = kv([
+            ["PROBE", pr.implemented ? String(pr.status || "OK") : "NOT_IMPLEMENTED"],
+            ["bundle_ms", pr.bundle_ms != null ? Number(pr.bundle_ms).toFixed(2) : "—"],
+            ["FORWARD", fmt(f)],
+            ["  stop_mgn", f.stopping_margin != null ? Number(f.stopping_margin).toFixed(2) : "—"],
+            ["BACKWARD", fmt(b)],
+            ["  escape", b.escape_available == null ? "—" : String(b.escape_available)],
+            ["LEFT", fmt(L)],
+            ["RIGHT", fmt(R)],
+            ["TURN", fmt(t)],
+            ["  max_yaw", t.max_safe_yaw_delta != null ? (Number(t.max_safe_yaw_delta) * 57.3).toFixed(0) + "°" : "—"],
+            ["note", "evidence-only; no auto switch"],
+          ]);
+        });
+      },
+      dbg_phase4_commit(card) {
+        const body = card.querySelector(".widget-body");
+        throttleSnap(card, 250, (snap) => {
+          const c = snap.debug?.commitment || snap.debug?.phase4?.commitment || {};
+          const sides = snap.debug?.sides || snap.debug?.phase4?.sides || {};
+          const sw = snap.debug?.side_switch || snap.debug?.phase4?.side_switch || {};
+          body.innerHTML = kv([
+            ["COMMITMENT", c.implemented ? (c.active ? "LOCKED" : "READY") : "NOT IMPLEMENTED"],
+            ["active", String(!!c.active)],
+            ["commit.side", c.side || "NONE"],
+            ["phase", c.phase || "NONE"],
+            ["fail", c.failure_reason || "NONE"],
+            ["hard_fail", String(!!c.hard_fail)],
+            ["auth", sw.authorization_status || c.authorization_status || "—"],
+            ["soft_streak", String(c.soft_fail_streak ?? 0)],
+            ["age_s", c.age_s != null ? Number(c.age_s).toFixed(2) : "—"],
+            ["— SIDES —", ""],
+            ["policy avoid", sides.policy_avoid_side || "—"],
+            ["commit", sides.commitment_side || "—"],
+            ["selector", sides.selector_side || "—"],
+            ["fsm", sides.fsm_side || "—"],
+            ["controller", sides.controller_side || "—"],
+            ["actual w", sides.actual_motion_side || "—"],
+          ]);
+        });
+      },
+      dbg_phase4_switch(card) {
+        const body = card.querySelector(".widget-body");
+        throttleSnap(card, 250, (snap) => {
+          const s = snap.debug?.side_switch || snap.debug?.phase4?.side_switch || {};
+          const own = snap.debug?.ownership || snap.debug?.phase4?.ownership || {};
+          const pr = snap.debug?.probe || snap.debug?.phase4?.probe || {};
+          const gates = s.gates || {};
+          const failed = (s.failed_gates || []).join(",") || "—";
+          const gLine = (k) => (gates[k] == null ? "—" : gates[k] ? "PASS" : "FAIL");
+          body.innerHTML = kv([
+            ["AUTHORIZATION", s.authorized ? "AUTHORIZED" : s.status || s.authorization_status || "—"],
+            ["reason", s.reason || s.primary_reason || "—"],
+            ["from → to", `${s.from_side || s.current_side || "—"} → ${s.to_side || s.candidate_side || "—"}`],
+            ["raw candidate", s.candidate_side || "—"],
+            ["cur probe", s.current_probe_status || (pr.left && pr.left.status) || "—"],
+            ["alt probe", s.alternative_probe_status || s.candidate_probe || "—"],
+            ["turn", s.turn_probe_status || (pr.turn_in_place && pr.turn_in_place.status) || "—"],
+            ["safety", gLine("safety_ok")],
+            ["dynamic", gLine("dynamic_ok")],
+            ["cooldown", gLine("cooldown_ok")],
+            ["oscillation", gLine("oscillation_ok")],
+            ["failed gates", failed],
+            ["auth_ms", s.authorization_ms != null ? Number(s.authorization_ms).toFixed(3) : "—"],
+            ["authority", own.side_switch_authority || own.side_switch_authority_current || "NavigationPolicy"],
+          ]);
+        });
+      },
+      dbg_phase4_traj(card) {
+        const body = card.querySelector(".widget-body");
+        throttleSnap(card, 250, (snap) => {
+          const pt = snap.debug?.physical_trajectory || snap.debug?.phase4?.physical_trajectory || {};
+          const a = pt.active || {};
+          const rec = snap.debug?.recovery || snap.debug?.phase4?.recovery || {};
+          const bc = snap.debug?.breadcrumb || snap.debug?.phase4?.breadcrumb || {};
+          body.innerHTML = kv([
+            ["ACTIVE", a.source || "—"],
+            ["status", a.status || "—"],
+            ["valid", a.valid == null ? "—" : String(!!a.valid)],
+            ["length_m", a.length_m != null ? Number(a.length_m).toFixed(2) : "—"],
+            ["duration_s", a.duration_s != null ? Number(a.duration_s).toFixed(2) : "—"],
+            ["half_w", a.half_width_m != null ? Number(a.half_width_m).toFixed(3) : "—"],
+            ["min_clr", a.min_clearance != null ? Number(a.min_clearance).toFixed(2) : "—"],
+            ["collision", a.collision == null ? "—" : String(!!a.collision)],
+            ["risk", a.risk || "—"],
+            ["— RECOVERY —", ""],
+            ["class", rec.classification || "—"],
+            ["action", rec.action || "—"],
+            ["reason", rec.reason || "—"],
+            ["allow_rev", rec.allowed == null ? "—" : String(!!rec.allowed)],
+            ["— BREADCRUMB —", ""],
+            ["points", String(bc.count ?? (bc.points || []).length ?? 0)],
+            ["length_m", bc.length_m != null ? Number(bc.length_m).toFixed(2) : "—"],
+          ]);
+        });
+      },
+      dbg_policy_tl(card) {
+        const body = card.querySelector(".widget-body");
+        throttleSnap(card, 300, (snap) => {
+          const hist = (snap.debug?.nav_policy?.history || []).slice(-10).reverse();
+          if (!hist.length) {
+            body.innerHTML = '<div class="tag">no policy history</div>';
+            return;
+          }
+          body.innerHTML = hist
+            .map(
+              (h) =>
+                `<div class="bb-kv"><div class="k">${h.state || "?"}</div><div class="v">${h.reason || ""}</div></div>`
+            )
+            .join("");
+        });
+      },
+      dbg_policy_w: chartCard(
+        ["path_follow_weight", "local_deviation"],
+        ["#38bdf8", "#fbbf24"],
+        140,
+        (d) => {
+          const p = d.nav_policy || {};
+          return ` beh <b>${p.behavior || "—"}</b>`;
+        }
+      ),
       dbg_man_cmp(card) {
         const body = card.querySelector(".widget-body");
         throttleSnap(card, 250, (snap) => {
@@ -1005,6 +1161,83 @@
           y: 460,
           group: "MANEUVER",
           init: inits.dbg_man_cost,
+        },
+        dbg_nav_policy: {
+          title: "NAVIGATION POLICY",
+          w: 320,
+          h: 260,
+          minW: 220,
+          minH: 160,
+          x: 12,
+          y: 700,
+          group: "POLICY",
+          init: inits.dbg_nav_policy,
+        },
+        dbg_phase4_probe: {
+          title: "NAV PROBE",
+          w: 280,
+          h: 220,
+          minW: 200,
+          minH: 140,
+          x: 12,
+          y: 980,
+          group: "PHASE4",
+          init: inits.dbg_phase4_probe,
+        },
+        dbg_phase4_commit: {
+          title: "AVOIDANCE COMMIT",
+          w: 300,
+          h: 260,
+          minW: 220,
+          minH: 160,
+          x: 300,
+          y: 980,
+          group: "PHASE4",
+          init: inits.dbg_phase4_commit,
+        },
+        dbg_phase4_switch: {
+          title: "SIDE SWITCH",
+          w: 340,
+          h: 280,
+          minW: 240,
+          minH: 160,
+          x: 620,
+          y: 980,
+          group: "PHASE4",
+          init: inits.dbg_phase4_switch,
+        },
+        dbg_phase4_traj: {
+          title: "PHYSICAL TRAJECTORY",
+          w: 320,
+          h: 300,
+          minW: 220,
+          minH: 160,
+          x: 980,
+          y: 980,
+          group: "PHASE4",
+          init: inits.dbg_phase4_traj,
+        },
+        dbg_policy_tl: {
+          title: "POLICY TIMELINE",
+          w: 360,
+          h: 200,
+          minW: 240,
+          minH: 120,
+          x: 340,
+          y: 700,
+          group: "POLICY",
+          init: inits.dbg_policy_tl,
+        },
+        dbg_policy_w: {
+          title: "POLICY WEIGHTS",
+          w: 360,
+          h: 200,
+          minW: 260,
+          minH: 140,
+          x: 720,
+          y: 700,
+          group: "POLICY",
+          init: inits.dbg_policy_w,
         },
       };
       return R;

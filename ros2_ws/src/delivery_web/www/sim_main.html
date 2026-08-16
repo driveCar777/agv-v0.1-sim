@@ -6,7 +6,7 @@
 <title>AGV V0.1 · 真场景仿真</title>
 <script src="https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.min.js"></script>
 <script src="component_system.js?v=20260816m2"></script>
-<script src="nav_ui.js?v=20260816m2"></script>
+<script src="nav_ui.js?v=20260816p1"></script>
 <script src="sim3d.js?v=20260816m2"></script>
 <style>
   :root {
@@ -359,8 +359,36 @@
     const nav = snap.nav || {};
     const scene = snap.scene || {};
     view.setPose(agv.x || 0, agv.y || 0, agv.angle || 0);
-    // 主视图：仅局部蓝带（无全局折线）
-    view.setGuideBand(nav.local_path || [], '#3B82F6');
+    // STEP 3F-CORRECTIVE: Main map ACTIVE physical corridor (nav snapshot + debug)
+    const dbg0 = snap.debug || {};
+    const navPt = nav.physical_trajectory || null;
+    const dbgPt =
+      (dbg0.physical_trajectory && (dbg0.physical_trajectory.active || dbg0.physical_trajectory)) ||
+      (dbg0.phase4 && dbg0.phase4.physical_trajectory &&
+        (dbg0.phase4.physical_trajectory.active || dbg0.phase4.physical_trajectory)) ||
+      null;
+    const traj = (navPt && (navPt.left_edge || navPt.poses || navPt.centerline)) ? navPt
+      : (dbgPt && (dbgPt.left_edge || dbgPt.poses || dbgPt.centerline) ? dbgPt : null);
+    if (traj) {
+      const poses = traj.poses || traj.centerline || [];
+      const src = String(traj.source || "").toUpperCase();
+      let bandColor = '#3B82F6';
+      if (src.includes('RETREAT') || src.includes('BACKWARD') || src.includes('REVERSE')) {
+        bandColor = '#38BDF8'; // recovery / rearward cyan-blue
+      }
+      view.setGuideBand(poses, bandColor, {
+        status: traj.status,
+        soft_risk: traj.soft_risk,
+        half_width_m: traj.half_width_m,
+        left_edge: traj.left_edge,
+        right_edge: traj.right_edge,
+        swept_polygon: traj.swept_polygon,
+        source: src,
+        prefer_blue: true,
+      });
+    } else {
+      view.setGuideBand(nav.local_path || [], '#3B82F6', {});
+    }
     view.setObstacles(snap.obstacles || []);
     view.setActors(snap.actors || []);
     const dbg = snap.debug || {};
@@ -755,12 +783,21 @@
     body.style.display = 'flex';
     body.style.flexDirection = 'column';
     body.innerHTML = `
-      <div class="tag" id="candMeta" style="margin-bottom:6px">左=置信最高=蓝带 · 可拖动/缩放/关闭 · +组件可再添加</div>
+      <div class="tag" id="candMeta" style="margin-bottom:6px">Vehicle-centric · 上=车头 · 下=车尾 · 弧=差速曲率（非横移）</div>
       <div class="cand-panel" id="candPanel" style="flex:1;min-height:110px"></div>`;
     const panel = body.querySelector('#candPanel');
     const meta = body.querySelector('#candMeta');
 
-    function drawMini(canvas, path, best) {
+    function toBody(p, ax, ay, ayaw) {
+      const dx = (p.x || 0) - ax;
+      const dy = (p.y || 0) - ay;
+      const c = Math.cos(ayaw);
+      const s = Math.sin(ayaw);
+      // body +X = forward (front), +Y = left
+      return { x: dx * c + dy * s, y: -dx * s + dy * c };
+    }
+
+    function drawMini(canvas, path, best, pose) {
       const dpr = window.devicePixelRatio || 1;
       const w = canvas.clientWidth || 86;
       const h = canvas.clientHeight || 90;
@@ -769,41 +806,75 @@
       const ctx = canvas.getContext('2d');
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
       ctx.clearRect(0, 0, w, h);
+      // Fixed vehicle frame axes (always front↑ rear↓)
+      ctx.strokeStyle = 'rgba(148,163,184,0.35)';
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(w / 2, h - 6);
+      ctx.lineTo(w / 2, 6);
+      ctx.stroke();
+      ctx.fillStyle = 'rgba(148,163,184,0.7)';
+      ctx.font = '9px sans-serif';
+      ctx.fillText('F', w / 2 - 3, 10);
+      ctx.fillText('R', w / 2 - 3, h - 2);
+      // AGV box at origin
+      ctx.strokeStyle = 'rgba(51,65,85,0.85)';
+      ctx.strokeRect(w / 2 - 7, h / 2 - 10, 14, 20);
       if (!path || path.length < 2) return;
-      let minX = 1e9, minY = 1e9, maxX = -1e9, maxY = -1e9;
-      path.forEach((p) => {
-        minX = Math.min(minX, p.x); minY = Math.min(minY, p.y);
-        maxX = Math.max(maxX, p.x); maxY = Math.max(maxY, p.y);
+      const ax = pose?.x || 0;
+      const ay = pose?.y || 0;
+      const ayaw = pose?.angle != null ? pose.angle : (pose?.yaw || 0);
+      const bodyPath = path.map((p) => toBody(p, ax, ay, ayaw));
+      let maxR = 0.6;
+      bodyPath.forEach((p) => {
+        maxR = Math.max(maxR, Math.abs(p.x), Math.abs(p.y));
       });
-      const pad = 8;
-      const span = Math.max(maxX - minX, maxY - minY, 0.8);
-      const s = (Math.min(w, h) - pad * 2) / span;
-      const cx = (minX + maxX) / 2, cy = (minY + maxY) / 2;
-      const tx = (x) => w / 2 + (x - cx) * s;
-      const ty = (y) => h / 2 - (y - cy) * s;
+      const pad = 10;
+      const s = (Math.min(w, h) / 2 - pad) / maxR;
+      // up=front(+x_body), left=AGV left(+y_body)
+      const tx = (p) => w / 2 - p.y * s;
+      const ty = (p) => h / 2 - p.x * s;
       ctx.strokeStyle = best ? '#3B82F6' : 'rgba(100,116,139,0.55)';
       ctx.lineWidth = best ? 2.4 : 1.4;
       ctx.beginPath();
-      path.forEach((p, i) => (i ? ctx.lineTo(tx(p.x), ty(p.y)) : ctx.moveTo(tx(p.x), ty(p.y))));
+      bodyPath.forEach((p, i) => (i ? ctx.lineTo(tx(p), ty(p)) : ctx.moveTo(tx(p), ty(p))));
       ctx.stroke();
       ctx.fillStyle = best ? '#2563eb' : '#94a3b8';
       ctx.beginPath();
-      ctx.arc(tx(path[0].x), ty(path[0].y), 2.5, 0, Math.PI * 2);
+      ctx.arc(tx(bodyPath[0]), ty(bodyPath[0]), 2.5, 0, Math.PI * 2);
       ctx.fill();
     }
 
     card._onSnap = (snap) => {
       const nav = snap.nav || {};
-      const cands = nav.candidates || [];
+      const agv = snap.agv || {};
+      const dbg = snap.debug || {};
+      const pr = dbg.probe || dbg.phase4?.probe || {};
+      let cands = nav.candidates || [];
+      // Prefer Probe F/L/R/B physical corridors when present (same SoT as main map)
+      const probeCands = [];
+      ['forward', 'left', 'right', 'backward'].forEach((k) => {
+        const r = pr[k];
+        if (!r || !r.poses || r.poses.length < 2) return;
+        probeCands.push({
+          id: k.toUpperCase(),
+          label: k.toUpperCase(),
+          confidence: r.status === 'VALID' ? 0.9 : 0.3,
+          mode: k,
+          status: r.status,
+          path: r.poses,
+        });
+      });
+      if (probeCands.length) cands = probeCands;
       const stuck = Number(nav.stuck_s || 0);
       meta.textContent =
-        (cands.length ? `${cands.length}条 · 蓝带${Math.round((nav.confidence || 0) * 100)}%` : '尚未规划') +
+        (cands.length ? `${cands.length}条 · vehicle-centric` : '尚未规划') +
         ` · 相位 ${nav.phase || 'forward'}` +
         (stuck > 0 ? ` · 卡住${stuck.toFixed(1)}s` : '') +
         (nav.ctrl_note ? ` · ${nav.ctrl_note}` : '');
       panel.innerHTML = '';
       if (!cands.length) {
-        panel.innerHTML = '<div class="tag" style="padding:12px">导航规划后显示最多 10 条局部假设（左→右置信度）</div>';
+        panel.innerHTML = '<div class="tag" style="padding:12px">导航后显示 F/L/R/B 差速弧（上=车头）</div>';
         return;
       }
       cands.forEach((c, idx) => {
@@ -814,9 +885,9 @@
           <div class="cand-head" title="${c.label || ''}">#${c.id || idx + 1} ${c.label || ''}</div>
           <div class="cand-conf">${pct}%</div>
           <canvas></canvas>
-          <div class="cand-mode">${c.mode || 'forward'}</div>`;
+          <div class="cand-mode">${c.mode || c.status || 'forward'}</div>`;
         panel.appendChild(col);
-        drawMini(col.querySelector('canvas'), c.path || [], idx === 0);
+        drawMini(col.querySelector('canvas'), c.path || [], idx === 0, agv);
       });
     };
     card._onResize = () => state.snap && card._onSnap(state.snap);

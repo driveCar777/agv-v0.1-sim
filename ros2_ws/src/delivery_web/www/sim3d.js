@@ -378,42 +378,73 @@
       this.live.visible = n > 0;
     }
 
-    setGuideBand(path, colorHex) {
+    setGuideBand(path, colorHex, opts) {
       if (this.band) {
         this.scene.remove(this.band);
         this.band.geometry.dispose();
         this.band.material.dispose();
         this.band = null;
       }
-      // 局部蓝带：默认 executed；点数不足则不画（避免 vx≈0 时假尖端）
-      if (!path || path.length < 2) return;
-      // 过滤几乎重合的点
-      const filtered = [path[0]];
-      for (let i = 1; i < path.length; i++) {
-        const a = filtered[filtered.length - 1];
-        const b = path[i];
-        if (Math.hypot(b.x - a.x, b.y - a.y) >= 0.02) filtered.push(b);
+      // STEP 3F: prefer PhysicalTrajectoryCorridor edges (footprint⊕margin)
+      const o = opts || {};
+      const status = String(o.status || "").toUpperCase();
+      const preferBlue = !!o.prefer_blue;
+      let colorHexOut = colorHex || "#3B82F6";
+      if (!preferBlue) {
+        if (status === "VALID" && o.soft_risk) colorHexOut = "#EAB308";
+        else if (status === "VALID") colorHexOut = "#22C55E";
+        else if (status === "INVALID") colorHexOut = "#EF4444";
+        else if (status === "UNKNOWN" || status === "STALE") colorHexOut = "#94A3B8";
+      } else {
+        // Main map: keep blue/cyan active band; only invalidate → red
+        if (status === "INVALID") colorHexOut = "#EF4444";
+        else if (status === "VALID" && o.soft_risk) colorHexOut = "#60A5FA";
       }
-      if (filtered.length < 2) return;
-      path = filtered;
-      const color = new THREE.Color("#3B82F6");
+
+      let left = o.left_edge || null;
+      let right = o.right_edge || null;
+      const halfW = o.half_width_m != null ? Number(o.half_width_m) : null;
+
+      // Fallback: centerline + yaw/path-tangent half-width (= vehicle footprint half + margin)
+      if ((!left || !right) && path && path.length >= 2) {
+        const filtered = [path[0]];
+        for (let i = 1; i < path.length; i++) {
+          const a = filtered[filtered.length - 1];
+          const b = path[i];
+          if (Math.hypot(b.x - a.x, b.y - a.y) >= 0.02) filtered.push(b);
+        }
+        if (filtered.length < 2) return;
+        path = filtered;
+        const hw = halfW != null && halfW > 0.05 ? halfW : 0.275 + 0.18; // 0.5*W + margins
+        left = [];
+        right = [];
+        for (let i = 0; i < path.length; i++) {
+          const p = path[i];
+          let nx, ny;
+          if (p.yaw != null) {
+            nx = -Math.sin(p.yaw);
+            ny = Math.cos(p.yaw);
+          } else {
+            const n = path[Math.min(path.length - 1, i + 1)];
+            const dx = n.x - p.x;
+            const dy = n.y - p.y;
+            const len = Math.hypot(dx, dy) || 1;
+            nx = -dy / len;
+            ny = dx / len;
+          }
+          left.push({ x: p.x + nx * hw, y: p.y + ny * hw });
+          right.push({ x: p.x - nx * hw, y: p.y - ny * hw });
+        }
+      }
+      if (!left || !right || left.length < 2 || right.length < 2) return;
+      const nPts = Math.min(left.length, right.length);
+      const color = new THREE.Color(colorHexOut);
       const positions = [];
       const indices = [];
-      const nPts = path.length;
       for (let i = 0; i < nPts; i++) {
-        const p = path[i];
-        const n = path[Math.min(nPts - 1, i + 1)];
-        const dx = n.x - p.x;
-        const dy = n.y - p.y;
-        const len = Math.hypot(dx, dy) || 1;
-        // 起点更窄（贴保险杠），往后渐宽到约车宽一半
-        const t = nPts <= 1 ? 1 : i / (nPts - 1);
-        const half = 0.10 + 0.16 * t;
-        const px = (-dy / len) * half;
-        const py = (dx / len) * half;
         const y = 0.08;
-        positions.push(p.x + px, y, -(p.y + py));
-        positions.push(p.x - px, y, -(p.y - py));
+        positions.push(left[i].x, y, -left[i].y);
+        positions.push(right[i].x, y, -right[i].y);
       }
       for (let i = 0; i < nPts - 1; i++) {
         const a = i * 2;
@@ -426,11 +457,12 @@
       const mat = new THREE.MeshBasicMaterial({
         color,
         transparent: true,
-        opacity: 0.62,
+        opacity: 0.55,
         side: THREE.DoubleSide,
         depthWrite: false,
       });
       this.band = new THREE.Mesh(geo, mat);
+      this.band.renderOrder = 1;
       this.scene.add(this.band);
     }
 

@@ -141,6 +141,7 @@ class SimApp:
             debug_blob = dict(getattr(self.state, "_debug_snapshot", {}) or {})
             path_lateral = float(getattr(self.state, "_path_lateral_m", 0.0) or 0.0)
             path_heading = float(getattr(self.state, "_path_heading_err", 0.0) or 0.0)
+            physical_corridor = dict(getattr(self.state, "_physical_corridor", {}) or {})
         navigating = nav_mode in ("tracking", "avoid", "planned", "planner_debug")
         # 未导航：车周静态点云；导航中：实时雷达点云为主
         if navigating and nav_mode != "planner_debug":
@@ -250,7 +251,8 @@ class SimApp:
                 "planning": planning_metrics,
                 "path_lateral_error": round(path_lateral, 4),
                 "path_heading_error": round(path_heading, 4),
-                "blue_band_means": "executed kinematic band after safety (not global path)",
+                "blue_band_means": "active physical trajectory corridor (Probe/Recovery SoT)",
+                "physical_trajectory": physical_corridor or None,
             },
             "debug": debug_blob,
             "safety": {

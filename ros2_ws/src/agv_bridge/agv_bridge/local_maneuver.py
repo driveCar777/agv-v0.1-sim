@@ -206,13 +206,14 @@ def rollout_candidate(
     clrs: List[float] = []
     gdev_acc = 0.0
     gdev_n = 0
-    traj: List[Dict[str, float]] = [{"x": cx, "y": cy}]
+    # STEP 3F: store yaw so PhysicalTrajectoryCorridor / Probe share ONE rollout
+    traj: List[Dict[str, float]] = [{"x": cx, "y": cy, "yaw": round(cyaw, 4)}]
 
     for i in range(ROLLOUT_STEPS):
         cx += vx * math.cos(cyaw) * ROLLOUT_DT
         cy += vx * math.sin(cyaw) * ROLLOUT_DT
         cyaw = wrap_pi(cyaw + w * ROLLOUT_DT)
-        traj.append({"x": round(cx, 3), "y": round(cy, 3)})
+        traj.append({"x": round(cx, 3), "y": round(cy, 3), "yaw": round(cyaw, 4)})
         if not _in_map(cx, cy, map_bounds):
             cand.feasible = False
             cand.reason = "OUT_OF_MAP"
@@ -446,11 +447,23 @@ class LocalManeuverSelector:
         map_bounds: Optional[Tuple[float, float, float, float]] = None,
         dynamic_short: bool = False,
         force: bool = False,
+        require_capture: bool = True,
+        max_deviation_m: float = 1.2,
+        path_follow_scale: float = 1.0,
+        commitment_active: bool = False,
+        committed_side: Optional[str] = None,
+        side_switch_authorized: bool = False,
+        commitment_hard_fail: bool = False,
+        authorized_side: Optional[str] = None,
     ) -> ManeuverComparisonResult:
         if not self.needs_compare(now=now, front_near=front_near, forward_feasible=forward_feasible, force=force):
             if self.last_result is not None:
                 return self.last_result
         self.last_compare_ts = now
+        # Soften capture gate during LOCAL_AVOID (policy require_capture_hard=False)
+        capt = bool(require_capture)
+        cap_dist_limit = 4.5 if capt else 7.5
+        dev_soft_scale = max(0.2, float(path_follow_scale))
 
         s_cur = project_pose_to_path(x, y, yaw, path).s if path else 0.0
         cands: Dict[str, LocalManeuverCandidate] = {}
@@ -470,7 +483,7 @@ class LocalManeuverSelector:
             prev_w=self.prev_w,
             map_bounds=map_bounds,
             s_current=s_cur,
-            require_capture=True,
+            require_capture=capt,
         )
         if front_near < DEFAULT_GEOM.front_stop_m:
             cands[DEC_FORWARD].feasible = False
@@ -495,7 +508,7 @@ class LocalManeuverSelector:
             prev_w=self.prev_w,
             map_bounds=map_bounds,
             s_current=s_cur,
-            require_capture=True,
+            require_capture=capt,
         )
         cands[DEC_RIGHT] = rollout_candidate(
             ctype=DEC_RIGHT,
@@ -512,7 +525,7 @@ class LocalManeuverSelector:
             prev_w=self.prev_w,
             map_bounds=map_bounds,
             s_current=s_cur,
-            require_capture=True,
+            require_capture=capt,
         )
         # Close-range: primary arc may not clear before inflated obstacle — aggressive retry
         if front_near < 1.35 and (not cands[DEC_LEFT].feasible or not cands[DEC_RIGHT].feasible):
@@ -532,7 +545,7 @@ class LocalManeuverSelector:
                     prev_w=self.prev_w,
                     map_bounds=map_bounds,
                     s_current=s_cur,
-                    require_capture=True,
+                    require_capture=capt,
                 )
                 if alt.feasible or alt.total_cost < cands[DEC_LEFT].total_cost:
                     cands[DEC_LEFT] = alt
@@ -552,7 +565,7 @@ class LocalManeuverSelector:
                     prev_w=self.prev_w,
                     map_bounds=map_bounds,
                     s_current=s_cur,
-                    require_capture=True,
+                    require_capture=capt,
                 )
                 if alt.feasible or alt.total_cost < cands[DEC_RIGHT].total_cost:
                     cands[DEC_RIGHT] = alt
@@ -612,6 +625,30 @@ class LocalManeuverSelector:
         cands[DEC_REVERSE] = rev
 
         # Soft free-space bias (not sole selector): reward genuinely freer side
+        # Scale path-alignment soft costs by policy path_follow_scale during AVOID
+        for k in (DEC_LEFT, DEC_RIGHT, DEC_FORWARD):
+            if k in cands and cands[k].feasible:
+                cands[k].deviation_cost *= dev_soft_scale
+                cands[k].total_cost = (
+                    cands[k].clearance_cost
+                    + cands[k].capture_cost
+                    + cands[k].heading_cost
+                    + cands[k].progress_cost
+                    + cands[k].turn_cost
+                    + cands[k].deviation_cost
+                    + cands[k].obstacle_cost
+                    + cands[k].switch_cost
+                    + DURATION_SOFT * cands[k].duration
+                )
+                # Soft corridor: penalize endpoint lateral beyond max_deviation
+                if abs(cands[k].lateral_error) > max_deviation_m:
+                    over = abs(cands[k].lateral_error) - max_deviation_m
+                    cands[k].total_cost += 12.0 * over
+                    if over > 0.6 and capt:
+                        cands[k].feasible = False
+                        cands[k].reason = "LOCAL_DEVIATION_EXCEEDED"
+                        cands[k].route_quality = QUALITY_BLOCKED
+
         if cands[DEC_LEFT].feasible:
             cands[DEC_LEFT].total_cost -= 4.0 * min(1.8, max(0.0, left_free - right_free))
             cands[DEC_LEFT].total_cost = max(1.0, cands[DEC_LEFT].total_cost)
@@ -640,7 +677,30 @@ class LocalManeuverSelector:
                 cands[DEC_RIGHT].vx = 0.10
                 cands[DEC_RIGHT].w = -WZ_MAX
 
-        selected, reason = self._select(now, cands, forward_feasible=forward_feasible, dynamic_short=dynamic_short)
+        # Raw preference (ignore commitment) for debug — not authoritative
+        raw_pref = None
+        raw_cost = 1e18
+        for k in (DEC_LEFT, DEC_RIGHT):
+            if cands[k].feasible and cands[k].total_cost < raw_cost:
+                raw_pref, raw_cost = k, cands[k].total_cost
+        if cands[DEC_FORWARD].feasible and cands[DEC_FORWARD].route_quality in (
+            QUALITY_GOOD,
+            QUALITY_WARNING,
+        ):
+            if raw_pref is None or cands[DEC_FORWARD].total_cost + 1e-6 < raw_cost:
+                raw_pref = DEC_FORWARD
+
+        selected, reason = self._select(
+            now,
+            cands,
+            forward_feasible=forward_feasible,
+            dynamic_short=dynamic_short,
+            commitment_active=commitment_active,
+            committed_side=committed_side,
+            side_switch_authorized=side_switch_authorized,
+            commitment_hard_fail=commitment_hard_fail,
+            authorized_side=authorized_side,
+        )
         for c in cands.values():
             c.selected = c.type == selected
 
@@ -653,6 +713,12 @@ class LocalManeuverSelector:
             "forward_feasible": forward_feasible,
             "selected": selected,
             "reason": reason,
+            "raw_preferred_side": raw_pref,
+            "commitment_active": bool(commitment_active),
+            "committed_side": committed_side,
+            "side_switch_authorized": bool(side_switch_authorized),
+            "authorized_side": authorized_side,
+            "commitment_decision": reason if str(reason).startswith("COMMIT_") or str(reason).startswith("POLICY_") else None,
             "forward_cost": cands[DEC_FORWARD].total_cost,
             "left_cost": cands[DEC_LEFT].total_cost,
             "right_cost": cands[DEC_RIGHT].total_cost,
@@ -713,8 +779,22 @@ class LocalManeuverSelector:
         *,
         forward_feasible: bool,
         dynamic_short: bool,
+        commitment_active: bool = False,
+        committed_side: Optional[str] = None,
+        side_switch_authorized: bool = False,
+        commitment_hard_fail: bool = False,
+        authorized_side: Optional[str] = None,
     ) -> Tuple[str, str]:
         cur = self.current
+        # STEP 3E — authorized switch bypasses min-hold (one-shot Policy gate)
+        auth_side = str(authorized_side or "").upper()
+        if (
+            commitment_active
+            and side_switch_authorized
+            and auth_side in (DEC_LEFT, DEC_RIGHT)
+        ):
+            return auth_side, "POLICY_AUTHORIZED_SWITCH"
+
         if cur in cands and cands[cur].feasible and now < self.hold_until:
             if cur != DEC_FORWARD or forward_feasible or cands[DEC_FORWARD].feasible:
                 return cur, "HOLD_MIN_TIME"
@@ -729,6 +809,18 @@ class LocalManeuverSelector:
                 if not self._better(cands[DEC_FORWARD].total_cost, cands[cur].total_cost):
                     return cur, "HOLD_SIDE_UNTIL_PASSED"
             return DEC_FORWARD, "FORWARD_OK"
+
+        # STEP 3C — Commitment gate: block unauthorized LEFT↔RIGHT switches
+        cs = str(committed_side or "").upper()
+        if (
+            commitment_active
+            and cs in (DEC_LEFT, DEC_RIGHT)
+            and not side_switch_authorized
+        ):
+            if cands[cs].feasible:
+                return cs, "COMMIT_KEEP"
+            _ = commitment_hard_fail
+            return cs, "COMMIT_REVALIDATION_REQUIRED"
 
         left_ok = cands[DEC_LEFT].feasible
         right_ok = cands[DEC_RIGHT].feasible

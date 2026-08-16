@@ -55,6 +55,7 @@ def patch_mock_state(state) -> None:
     state._path_heading_err = 0.0
     state._last_debug_sample_t = 0.0
     state._debug_snapshot: Dict[str, Any] = {}
+    state._physical_corridor: Dict[str, Any] = {}
 
     state._cmd_vx = 0.0
     state._cmd_vy = 0.0
@@ -219,6 +220,12 @@ def patch_mock_state(state) -> None:
         lateral_error: float = 0.0,
         actual_clearance: float = 1.0,
         nav_active: bool = True,
+        dynamic_short: bool = False,
+        dynamic_long: bool = False,
+        arrived: bool = False,
+        state_vx: float = 0.0,
+        safety_zero: bool = False,
+        planned_rejected_by_safety: bool = False,
     ):
         return local_mppi.step(
             world,
@@ -239,6 +246,12 @@ def patch_mock_state(state) -> None:
             actual_clearance=actual_clearance,
             candidates_hint=list(getattr(state, "_path_candidates", []) or []),
             nav_active=nav_active,
+            dynamic_short=dynamic_short,
+            dynamic_long=dynamic_long,
+            arrived=arrived,
+            state_vx=state_vx,
+            safety_zero=safety_zero,
+            planned_rejected_by_safety=planned_rejected_by_safety,
         )
 
     def _log_decision(key: str, tip: str, level: str = "info") -> None:
@@ -260,7 +273,7 @@ def patch_mock_state(state) -> None:
         """最终安全裁决。返回 (vx, w, stop_reason)。所有 Maneuver 必经此门。"""
         reason = STOP_NONE
         vx, w = cmd_vx, cmd_w
-        turning = phase in ("align", "turn_in_place", "reposition")
+        turning = phase in ("align", "turn_in_place", "reposition", "local_avoid")
         if emergency:
             return 0.0, 0.0, STOP_EMERGENCY
         if phase == "safe_stop":
@@ -521,6 +534,7 @@ def patch_mock_state(state) -> None:
             first_col = getattr(state, "_debug_first_collision", None)
             mppi_meta = dict(getattr(state, "_debug_mppi_meta", {}) or {})
             maneuver = dict(getattr(state, "_maneuver", {}) or {})
+            nav_policy = dict(getattr(state, "_nav_policy", {}) or {})
             cmd_source = str(getattr(state, "_cmd_source", "") or "")
             scene = world.scene_info()
 
@@ -634,6 +648,10 @@ def patch_mock_state(state) -> None:
                 "maneuver_reason": maneuver.get("reason"),
                 "forward_reason": maneuver.get("forward_reason"),
                 "local_decision": maneuver.get("decision"),
+                "policy_state": (nav_policy.get("state") if nav_policy else None),
+                "policy_behavior": (nav_policy.get("behavior") if nav_policy else None),
+                "path_follow_weight": ((nav_policy.get("decision") or {}).get("path_follow_weight") if nav_policy else None),
+                "local_deviation": ((nav_policy.get("decision") or {}).get("corridor") or {}).get("lateral_error") if nav_policy else None,
                 "fwd_cost": ((maneuver.get("local_compare") or {}).get("snapshot") or {}).get("forward_cost"),
                 "left_cost": ((maneuver.get("local_compare") or {}).get("snapshot") or {}).get("left_cost"),
                 "right_cost": ((maneuver.get("local_compare") or {}).get("snapshot") or {}).get("right_cost"),
@@ -686,6 +704,7 @@ def patch_mock_state(state) -> None:
             cmd_w=cmd_w,
             maneuver=maneuver,
             cmd_source=cmd_source,
+            nav_policy=nav_policy,
         )
         if dbg.get("wall_approach") is not None:
             dbg["wall_approach"]["nearest_obstacle_point"] = obs_info.get("nearest_obstacle_point")
@@ -904,6 +923,35 @@ def patch_mock_state(state) -> None:
                 except Exception:
                     clr_here = max(0.05, min(front_near, rear_near) * 0.5)
 
+                # Dynamic obstacle cue from scene actors near forward cone
+                dyn_short, dyn_long = False, False
+                try:
+                    ax = 0.0
+                    nearest_act = 99.0
+                    for a in list(getattr(world, "actors", []) or []):
+                        dx = float(a.get("x", 0)) - x
+                        dy = float(a.get("y", 0)) - y
+                        dist = math.hypot(dx, dy)
+                        bearing = math.atan2(dy, dx) - yaw
+                        while bearing > math.pi:
+                            bearing -= 2 * math.pi
+                        while bearing < -math.pi:
+                            bearing += 2 * math.pi
+                        if abs(bearing) < 0.7 and dist < 4.0:
+                            nearest_act = min(nearest_act, dist)
+                    if nearest_act < 3.5:
+                        seen = float(getattr(state, "_dyn_front_since", 0.0) or 0.0)
+                        if seen <= 0:
+                            state._dyn_front_since = now
+                            seen = now
+                        age = now - seen
+                        dyn_short = age < 4.0
+                        dyn_long = age >= 6.0
+                    else:
+                        state._dyn_front_since = 0.0
+                except Exception:
+                    dyn_short, dyn_long = False, False
+
                 if need_local and local_mppi.phase != "safe_stop":
                     res = _local_once(
                         x,
@@ -922,6 +970,11 @@ def patch_mock_state(state) -> None:
                         lateral_error=float(getattr(prog, "lateral_m", 0.0) or 0.0),
                         actual_clearance=clr_here,
                         nav_active=True,
+                        dynamic_short=dyn_short,
+                        dynamic_long=dyn_long,
+                        state_vx=float(getattr(state, "vx", 0.0) or 0.0),
+                        safety_zero=bool(getattr(state, "_last_safety_zero", False)),
+                        planned_rejected_by_safety=bool(getattr(state, "_last_safety_blocked", False)),
                     )
                     mppi_vx, mppi_w = res.vx, res.w
                     planned_band = list(res.best_path)
@@ -950,6 +1003,31 @@ def patch_mock_state(state) -> None:
                         state._debug_mppi_meta = dict(getattr(m, "_last_meta", {}) or {})
                         if getattr(local_mppi, "maneuver", None):
                             state._maneuver = local_mppi.maneuver.to_telemetry()
+                        if getattr(local_mppi, "policy", None):
+                            tel = local_mppi.policy.to_telemetry()
+                            # STEP 3D evidence-only attach (does not affect control)
+                            if getattr(local_mppi, "last_probe", None) is not None:
+                                tel["probe"] = local_mppi.last_probe.to_dict(now)
+                                tel["probe_events"] = list(local_mppi.probe.events[-12:])
+                            # STEP 3F — physical corridor / breadcrumb / recovery
+                            if getattr(local_mppi, "last_recovery", None) is not None:
+                                tel["recovery"] = local_mppi.last_recovery.to_dict()
+                                rex = getattr(local_mppi.maneuver, "_recovery_exec", None)
+                                if isinstance(rex, dict):
+                                    tel["recovery"]["execution"] = dict(rex)
+                            if getattr(local_mppi, "last_physical_trajectory", None) is not None:
+                                tel["physical_trajectory"] = local_mppi.last_physical_trajectory
+                                state._physical_corridor = local_mppi.last_physical_trajectory
+                            else:
+                                state._physical_corridor = {}
+                            if getattr(local_mppi, "breadcrumb", None) is not None:
+                                tel["breadcrumb"] = local_mppi.breadcrumb.to_dict()
+                            # attach side_switch from policy if present
+                            if getattr(local_mppi.policy, "last_switch_decision", None) is not None:
+                                tel["side_switch"] = local_mppi.policy.last_switch_decision.to_dict()
+                                tok = local_mppi.policy.switch_token
+                                tel["switch_token"] = tok.to_dict() if tok else None
+                            state._nav_policy = tel
                 elif now - cmd_stamp > 0.40 and local_mppi.phase != "safe_stop":
                     res = _local_once(
                         x,
@@ -968,6 +1046,11 @@ def patch_mock_state(state) -> None:
                         lateral_error=float(getattr(prog, "lateral_m", 0.0) or 0.0),
                         actual_clearance=clr_here,
                         nav_active=True,
+                        dynamic_short=dyn_short,
+                        dynamic_long=dyn_long,
+                        state_vx=float(getattr(state, "vx", 0.0) or 0.0),
+                        safety_zero=bool(getattr(state, "_last_safety_zero", False)),
+                        planned_rejected_by_safety=bool(getattr(state, "_last_safety_blocked", False)),
                     )
                     mppi_vx, mppi_w = res.vx, res.w
                     planned_band = list(res.best_path)
@@ -987,6 +1070,28 @@ def patch_mock_state(state) -> None:
                         state._debug_mppi_meta = dict(getattr(m, "_last_meta", {}) or {})
                         if getattr(local_mppi, "maneuver", None):
                             state._maneuver = local_mppi.maneuver.to_telemetry()
+                        if getattr(local_mppi, "policy", None):
+                            tel = local_mppi.policy.to_telemetry()
+                            if getattr(local_mppi, "last_probe", None) is not None:
+                                tel["probe"] = local_mppi.last_probe.to_dict(now)
+                                tel["probe_events"] = list(local_mppi.probe.events[-12:])
+                            if getattr(local_mppi, "last_recovery", None) is not None:
+                                tel["recovery"] = local_mppi.last_recovery.to_dict()
+                                rex = getattr(local_mppi.maneuver, "_recovery_exec", None)
+                                if isinstance(rex, dict):
+                                    tel["recovery"]["execution"] = dict(rex)
+                            if getattr(local_mppi, "last_physical_trajectory", None) is not None:
+                                tel["physical_trajectory"] = local_mppi.last_physical_trajectory
+                                state._physical_corridor = local_mppi.last_physical_trajectory
+                            else:
+                                state._physical_corridor = {}
+                            if getattr(local_mppi, "breadcrumb", None) is not None:
+                                tel["breadcrumb"] = local_mppi.breadcrumb.to_dict()
+                            if getattr(local_mppi.policy, "last_switch_decision", None) is not None:
+                                tel["side_switch"] = local_mppi.policy.last_switch_decision.to_dict()
+                                tok = local_mppi.policy.switch_token
+                                tel["switch_token"] = tok.to_dict() if tok else None
+                            state._nav_policy = tel
                 else:
                     mppi_vx, mppi_w = cmd_vx, cmd_w
                     planned_band = list(getattr(state, "_planned_path", []) or [])
@@ -1032,6 +1137,12 @@ def patch_mock_state(state) -> None:
             if local_mppi.phase == "safe_stop":
                 safe_vx = safe_w = 0.0
                 stop_reason = STOP_FAILED
+
+            with state.lock:
+                state._last_safety_zero = abs(safe_vx) < 1e-4 and abs(safe_w) < 1e-4
+                state._last_safety_blocked = safety_reason != STOP_NONE and (
+                    abs(cmd_before_vx) > 0.02 or abs(cmd_before_w) > 0.02
+                ) and abs(safe_vx) < abs(cmd_before_vx) - 0.01
 
             # avoid 模式标签（兼容旧 UI）
             if stop_reason == STOP_FRONT:
