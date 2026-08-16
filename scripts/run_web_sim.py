@@ -1,0 +1,622 @@
+#!/usr/bin/env python3
+"""V0.1 真场景仿真 Web 栈（Three.js 第三人称 + smap 办公室 / 室外园区）。
+
+无需 ROS2，Windows 可跑。控制仍走 Robokit 实车同款 API。
+"""
+
+from __future__ import annotations
+
+import json
+import math
+import socket
+import struct
+import sys
+import threading
+import time
+from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
+from typing import Any, Dict, Optional, Tuple
+from urllib.parse import parse_qs, urlparse
+
+ROOT = Path(__file__).resolve().parents[1]
+SRC = ROOT / "ros2_ws" / "src"
+sys.path.insert(0, str(SRC / "agv_bridge"))
+
+from agv_bridge.robokit_mock_server import (  # noqa: E402
+    HEADER_FMT,
+    HEADER_SIZE,
+    PORT_CONFIG,
+    PORT_CONTROL,
+    PORT_NAV,
+    PORT_PUSH,
+    PORT_STATUS,
+    RobokitMockState,
+    _serve_port,
+    _serve_push,
+)
+from agv_bridge.sim_api_ext import patch_mock_state  # noqa: E402
+from agv_bridge.sim_world import get_world  # noqa: E402
+
+WWW = ROOT / "ros2_ws" / "src" / "delivery_web" / "www"
+
+
+class RobokitTcp:
+    def __init__(self, host: str = "127.0.0.1") -> None:
+        self.host = host
+        self._seq = 0
+
+    def call(self, port: int, api: int, payload: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        body = b""
+        if payload:
+            body = json.dumps(payload, separators=(",", ":")).encode("utf-8")
+        self._seq = (self._seq + 1) % 65536
+        hdr = struct.pack(HEADER_FMT, 0x5A, 1, self._seq, len(body), api, b"\x00" * 6)
+        with socket.create_connection((self.host, port), timeout=2.0) as sock:
+            sock.sendall(hdr + body)
+            rh = self._recv(sock, HEADER_SIZE)
+            _s, _v, _n, length, _t, _r = struct.unpack(HEADER_FMT, rh)
+            data = self._recv(sock, length) if length else b""
+            if not data:
+                return {}
+            return json.loads(data.decode("utf-8"))
+
+    @staticmethod
+    def _recv(sock: socket.socket, n: int) -> bytes:
+        buf = bytearray()
+        while len(buf) < n:
+            chunk = sock.recv(n - len(buf))
+            if not chunk:
+                raise OSError("closed")
+            buf.extend(chunk)
+        return bytes(buf)
+
+
+class SimApp:
+    def __init__(self) -> None:
+        self.host = "127.0.0.1"
+        self.state = RobokitMockState()
+        patch_mock_state(self.state)
+        self.world = get_world()
+        self.tcp = RobokitTcp(self.host)
+        self.goal: Optional[Tuple[float, float]] = None
+        self._start_mock()
+
+    def _start_mock(self) -> None:
+        print("[web_sim] starting mock ports...", flush=True)
+        for port in (PORT_STATUS, PORT_CONTROL, PORT_NAV, PORT_CONFIG):
+            threading.Thread(
+                target=_serve_port, args=(self.host, port, self.state), daemon=True
+            ).start()
+        threading.Thread(
+            target=_serve_push, args=(self.host, PORT_PUSH, self.state), daemon=True
+        ).start()
+        time.sleep(0.5)
+        self.state.do_lock("web_sim")
+        self.world.emit("control_lock", "Web 仿真端已抢控制权")
+        print("[web_sim] mock ready · scene=", self.world.scene_id, flush=True)
+
+    def snapshot(self) -> Dict[str, Any]:
+        loc = self.tcp.call(PORT_STATUS, 1004, {})
+        spd = self.tcp.call(PORT_STATUS, 1005, {})
+        bat = self.tcp.call(PORT_STATUS, 1007, {})
+        task = self.tcp.call(PORT_STATUS, 1020, {})
+        x = float(loc.get("x", self.state.x))
+        y = float(loc.get("y", self.state.y))
+        yaw = float(loc.get("angle", self.state.angle))
+        live = self.world.lidar_world_points(x, y, yaw, stride=1, step_deg=1.0)
+        banner = self.world.current_banner()
+        scene = self.world.scene_info()
+        with self.state.lock:
+            local_raw = list(getattr(self.state, "_path", []) or [])
+            planned_raw = list(getattr(self.state, "_planned_path", []) or [])
+            global_raw = list(getattr(self.state, "_global_path", []) or [])
+            nav_mode = getattr(self.state, "_nav_mode", "idle")
+            pending = bool(getattr(self.state, "_pending_confirm", False))
+            goal_xy = getattr(self.state, "_goal_xy", None)
+            local_n = int(getattr(self.state, "_local_replan_count", 0) or 0)
+            global_n = int(getattr(self.state, "_global_replan_count", 0) or 0)
+            candidates = list(getattr(self.state, "_path_candidates", []) or [])
+            best_conf = float(getattr(self.state, "_best_confidence", 0.0) or 0.0)
+            stuck_s = float(getattr(self.state, "_stuck_s", 0.0) or 0.0)
+            track_mode = str(getattr(self.state, "_track_mode", "") or "")
+            nav_phase = str(getattr(self.state, "_nav_phase", "forward") or "forward")
+            ctrl_note = str(getattr(self.state, "_ctrl_note", "") or "")
+            stop_reason = str(getattr(self.state, "_stop_reason", "NONE") or "NONE")
+            mppi_vx = float(getattr(self.state, "_mppi_vx", 0.0) or 0.0)
+            mppi_w = float(getattr(self.state, "_mppi_w", 0.0) or 0.0)
+            cmd_vx_bs = float(getattr(self.state, "_cmd_vx_before_safety", 0.0) or 0.0)
+            cmd_w_bs = float(getattr(self.state, "_cmd_w_before_safety", 0.0) or 0.0)
+            cmd_vx_as = float(getattr(self.state, "_cmd_vx_after_safety", 0.0) or 0.0)
+            cmd_w_as = float(getattr(self.state, "_cmd_w_after_safety", 0.0) or 0.0)
+            front_near = float(getattr(self.state, "_front_near", 30.0) or 30.0)
+            rear_near = float(getattr(self.state, "_rear_near", 30.0) or 30.0)
+            collision = bool(getattr(self.state, "_collision", False))
+            path_progress_s = float(getattr(self.state, "_path_progress_s", 0.0) or 0.0)
+            goal_distance = float(getattr(self.state, "_goal_distance", 0.0) or 0.0)
+            recovery_attempts = int(getattr(self.state, "_recovery_attempts", 0) or 0)
+            control_mode = str(getattr(self.state, "_control_mode", "mppi") or "mppi")
+            emergency = bool(getattr(self.state, "emergency", False) or getattr(self.state, "soft_emc", False))
+            raw_global = list(getattr(self.state, "_raw_global_path", []) or [])
+            planning_metrics = dict(getattr(self.state, "_planning_metrics", {}) or {})
+            debug_blob = dict(getattr(self.state, "_debug_snapshot", {}) or {})
+            path_lateral = float(getattr(self.state, "_path_lateral_m", 0.0) or 0.0)
+            path_heading = float(getattr(self.state, "_path_heading_err", 0.0) or 0.0)
+        navigating = nav_mode in ("tracking", "avoid", "planned", "planner_debug")
+        # 未导航：车周静态点云；导航中：实时雷达点云为主
+        if navigating and nav_mode != "planner_debug":
+            surround = live
+            map_preview = self.world.map_cloud(max_n=5000)
+        else:
+            surround = self.world.local_cloud(x, y, radius=35.0, max_n=7000)
+            map_preview = surround
+        # 小地图用全局；主视图蓝带默认 executed band（_path）
+        global_pts = [{"x": p[0], "y": p[1]} for p in (global_raw or local_raw)]
+        raw_pts = [{"x": p[0], "y": p[1]} for p in raw_global] if raw_global else []
+        local_pts = [{"x": p[0], "y": p[1]} for p in local_raw] if local_raw else []
+        planned_pts = [{"x": p[0], "y": p[1]} for p in planned_raw] if planned_raw else []
+        return {
+            "updated_at": time.time(),
+            "env": {
+                "mode": "sim_true_scene",
+                "adapter_connected": True,
+                "agv_host": self.host,
+                "control_locked": True,
+                "control_wanted": True,
+                "backend": "robokit_mock_3055",
+                "sim_engine": "smap_occupancy+dual_lidar+threejs",
+            },
+            "agv_link": {"status": "ONLINE"},
+            "agv": {
+                "x": x,
+                "y": y,
+                "angle": yaw,
+                "yaw_deg": yaw * 180.0 / math.pi,
+                "battery": int(float(bat.get("battery_level", 0.87)) * 100)
+                if float(bat.get("battery_level", 0.87)) <= 1.0
+                else int(bat.get("battery_level", 87)),
+                "battery_level": float(bat.get("battery_level", 0.87)),
+                "charging": bool(bat.get("charging", False)),
+                "vx": float(spd.get("vx", 0.0)),
+                "w": float(spd.get("w", 0.0)),
+                "speed": abs(float(spd.get("vx", 0.0))),
+                "is_stop": bool(spd.get("is_stop", True)),
+                "task_status": int(task.get("task_status", 0)),
+                "target_id": task.get("target_id") or "",
+                "blocked": bool(getattr(self.state, "block_reason", 0)),
+                "emergency": False,
+                "soft_emc": False,
+                "current_station": loc.get("current_station") or "",
+                "confidence": float(loc.get("confidence", 0.95)),
+                "model": "AMB-150",
+            },
+            "meta": {
+                "map_name": scene["name"],
+                "vehicle_model": "AMB-150",
+                "scene": scene,
+            },
+            "scene": scene,
+            "laser": {
+                "live_lidar": True,
+                "source": "robokit_1009_dual",
+                "label": f"DUAL LIDAR {len(live)} pts",
+                "points": live,
+                "beam_count": len(live),
+                "message": "front+rear diagonal",
+                "point_count": len(live),
+            },
+            "perception": {
+                "surround_cloud": surround,
+                "mode": "live_lidar" if navigating else "panorama_map",
+            },
+            "obstacles": self.world.obstacle_list(),
+            "actors": self.world.actor_list(),
+            "chronicle": self.world.recent_chronicle(15),
+            "banner": banner,
+            "nav": {
+                "mode": nav_mode,
+                "pending_confirm": pending,
+                "goal": {"x": goal_xy[0], "y": goal_xy[1]} if goal_xy else None,
+                "path": global_pts,
+                "raw_global_path": raw_pts,
+                "processed_global_path": global_pts,
+                "local_path": local_pts,
+                "planned_path": planned_pts,
+                "executed_path": local_pts,
+                "candidates": candidates,
+                "confidence": best_conf,
+                "stuck_s": round(stuck_s, 1),
+                "track_mode": track_mode,
+                "phase": nav_phase,
+                "ctrl_note": ctrl_note,
+                "control_mode": control_mode,
+                "global_replan_count": global_n,
+                "local_replan_count": local_n,
+                "planner": "global_astar_quality+local_mppi",
+                "path_color": scene["path_color"],
+                "scene_kind": scene["kind"],
+                "mppi_vx": round(mppi_vx, 4),
+                "mppi_w": round(mppi_w, 4),
+                "cmd_vx_before_safety": round(cmd_vx_bs, 4),
+                "cmd_w_before_safety": round(cmd_w_bs, 4),
+                "cmd_vx_after_safety": round(cmd_vx_as, 4),
+                "cmd_w_after_safety": round(cmd_w_as, 4),
+                "state_vx": round(float(spd.get("vx", 0.0)), 4),
+                "state_w": round(float(spd.get("w", 0.0)), 4),
+                "path_progress_s": round(path_progress_s, 3),
+                "goal_distance": round(goal_distance, 3),
+                "recovery_attempts": recovery_attempts,
+                "stop_reason": stop_reason,
+                "candidate_count": len(candidates),
+                "planning": planning_metrics,
+                "path_lateral_error": round(path_lateral, 4),
+                "path_heading_error": round(path_heading, 4),
+                "blue_band_means": "executed kinematic band after safety (not global path)",
+            },
+            "debug": debug_blob,
+            "safety": {
+                "front_near": round(front_near, 3),
+                "rear_near": round(rear_near, 3),
+                "collision": collision,
+                "emergency": emergency,
+                "obstacle_blocked": stop_reason in ("FRONT_OBSTACLE", "REAR_OBSTACLE", "COLLISION_GUARD"),
+                "stop_reason": stop_reason,
+            },
+            "stations": {s["id"]: s for s in self._stations()},
+            "pois": self.world.pois(),
+            "map": {
+                "cloud": map_preview,
+                "stations": self._stations(),
+                "available": self.world.list_scenes(),
+                "smap_file": scene["name"],
+                "bounds": scene["bounds"],
+                "path_color": scene["path_color"],
+                "kind": scene["kind"],
+            },
+            "vision": {},
+            "devices": {},
+            "route_task": {},
+        }
+
+    def _stations(self) -> list:
+        return self.world.pois()
+
+    @staticmethod
+    def _local_path(path: list, x: float, y: float, horizon_m: float = 5.0) -> list:
+        """主视图只用车前方一段局部引导带。"""
+        if not path:
+            return []
+        # 找最近点
+        best_i = 0
+        best_d = 1e18
+        for i, p in enumerate(path):
+            d = math.hypot(float(p["x"]) - x, float(p["y"]) - y)
+            if d < best_d:
+                best_d = d
+                best_i = i
+        out = [{"x": x, "y": y}]
+        acc = 0.0
+        prev = (x, y)
+        for p in path[best_i:]:
+            px, py = float(p["x"]), float(p["y"])
+            acc += math.hypot(px - prev[0], py - prev[1])
+            out.append({"x": px, "y": py})
+            prev = (px, py)
+            if acc >= horizon_m:
+                break
+        return out
+
+    def plan_goal(self, x: float, y: float, target_id: str = "") -> Dict[str, Any]:
+        self.goal = (x, y)
+        if hasattr(self.state, "plan_nav_xy"):
+            resp = self.state.plan_nav_xy(x, y, target_id=target_id)
+        else:
+            resp = self.tcp.call(PORT_NAV, 3051, {"x": x, "y": y, "theta": 0.0})
+        ok = resp.get("ret_code", 1) == 0
+        return {
+            "success": ok,
+            "api": resp,
+            "goal": {"x": x, "y": y},
+            "path": resp.get("path") or [],
+            "pending_confirm": bool(resp.get("pending_confirm")),
+            "waypoints": resp.get("waypoints", 0),
+        }
+
+    def confirm(self) -> Dict[str, Any]:
+        if hasattr(self.state, "confirm_nav"):
+            resp = self.state.confirm_nav()
+        else:
+            resp = {"ret_code": 1}
+        return {"success": resp.get("ret_code", 1) == 0, "api": resp}
+
+    def set_goal(self, x: float, y: float, auto_start: bool = False) -> Dict[str, Any]:
+        if auto_start:
+            self.goal = (x, y)
+            resp = self.state.start_nav_xy(x, y, auto_start=True)
+            return {"success": resp.get("ret_code", 1) == 0, "api": resp, "goal": {"x": x, "y": y}}
+        return self.plan_goal(x, y)
+
+    def navigate_poi(self, poi_id: str) -> Dict[str, Any]:
+        poi = self.world.find_poi(poi_id)
+        if not poi:
+            return {"success": False, "message": f"点位不存在: {poi_id}"}
+        return self.plan_goal(poi.x, poi.y, target_id=poi.id)
+
+    def set_scene(self, scene_id: str) -> Dict[str, Any]:
+        if hasattr(self.state, "apply_scene"):
+            r = self.state.apply_scene(scene_id)
+        else:
+            r = self.world.set_scene(scene_id)
+        return r
+
+    def cmd_vel(self, vx: float, w: float) -> Dict[str, Any]:
+        resp = self.tcp.call(PORT_CONTROL, 3055, {"vx": vx, "vy": 0.0, "w": w})
+        return {"success": resp.get("ret_code", 1) == 0, "api": resp}
+
+    def cancel(self) -> Dict[str, Any]:
+        if hasattr(self.state, "soft_stop"):
+            resp = self.state.soft_stop()
+        else:
+            resp = self.tcp.call(PORT_NAV, 3003, {})
+            with self.state.lock:
+                self.state._pending_confirm = False
+                self.state._nav_mode = "idle"
+                self.state._path = []
+                self.state._goal_xy = None
+        self.world.emit("cancel", "MANUAL_STOP", level="warn")
+        return {"success": True, "api": resp}
+
+
+APP: Optional[SimApp] = None
+
+
+def make_handler(www: Path):
+    class Handler(SimpleHTTPRequestHandler):
+        extensions_map = {
+            **getattr(SimpleHTTPRequestHandler, "extensions_map", {}),
+            ".html": "text/html; charset=utf-8",
+            ".js": "application/javascript; charset=utf-8",
+            ".css": "text/css; charset=utf-8",
+            ".json": "application/json; charset=utf-8",
+        }
+
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, directory=str(www), **kwargs)
+
+        def log_message(self, fmt: str, *args) -> None:
+            if "/api/" in (args[0] if args else ""):
+                return
+            super().log_message(fmt, *args)
+
+        def _json(self, code: int, obj: Any) -> None:
+            raw = json.dumps(obj, ensure_ascii=False).encode("utf-8")
+            self.send_response(code)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Content-Length", str(len(raw)))
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+            self.wfile.write(raw)
+
+        def _read_json(self) -> Dict[str, Any]:
+            n = int(self.headers.get("Content-Length") or 0)
+            if n <= 0:
+                return {}
+            try:
+                return json.loads(self.rfile.read(n).decode("utf-8"))
+            except json.JSONDecodeError:
+                return {}
+
+        def do_OPTIONS(self) -> None:  # noqa: N802
+            self.send_response(204)
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.send_header("Access-Control-Allow-Methods", "GET,POST,OPTIONS")
+            self.send_header("Access-Control-Allow-Headers", "Content-Type")
+            self.end_headers()
+
+        def do_GET(self) -> None:  # noqa: N802
+            path = urlparse(self.path).path
+            assert APP is not None
+            if path in ("/", "/index.html"):
+                # 新主界面
+                self.path = "/sim_main.html"
+                return super().do_GET()
+            if path in ("/api/state", "/api/heartbeat"):
+                snap = APP.snapshot()
+                if path == "/api/heartbeat":
+                    self._json(
+                        200,
+                        {
+                            "ok": True,
+                            "agv": snap["agv"],
+                            "banner": snap["banner"],
+                            "laser": {"label": snap["laser"]["label"], "live_lidar": True},
+                            "env": snap["env"],
+                            "nav": snap["nav"],
+                            "scene": snap["scene"],
+                        },
+                    )
+                else:
+                    self._json(200, snap)
+                return
+            if path == "/api/version":
+                self._json(
+                    200,
+                    {
+                        "version": "0.1.0-sim-true",
+                        "mode": "true_scene_sim",
+                        "engine": "smap+threejs",
+                    },
+                )
+                return
+            if path == "/api/scenes":
+                self._json(200, {"scenes": APP.world.list_scenes(), "current": APP.world.scene_info()})
+                return
+            if path == "/api/pois":
+                q = parse_qs(urlparse(self.path).query).get("q", [""])[0]
+                pois = APP.world.pois()
+                if q:
+                    ql = q.lower()
+                    pois = [p for p in pois if ql in p["id"].lower() or ql in str(p.get("kind", "")).lower()]
+                self._json(200, {"pois": pois})
+                return
+            if path == "/api/chronicle":
+                self._json(
+                    200,
+                    {"banner": APP.world.current_banner(), "events": APP.world.recent_chronicle()},
+                )
+                return
+            if path in ("/api/nav/debug", "/api/debug/nav"):
+                if hasattr(APP.state, "get_nav_debug"):
+                    self._json(200, APP.state.get_nav_debug())
+                else:
+                    self._json(200, {"success": False, "message": "debug unsupported"})
+                return
+            return super().do_GET()
+
+        def do_POST(self) -> None:  # noqa: N802
+            path = urlparse(self.path).path
+            body = self._read_json()
+            assert APP is not None
+            if path in ("/api/goal", "/api/navigate_xy", "/api/nav/plan"):
+                if body.get("poi_id") or body.get("target_id"):
+                    self._json(200, APP.navigate_poi(str(body.get("poi_id") or body.get("target_id"))))
+                    return
+                x = float(body.get("x", 0.0))
+                y = float(body.get("y", 0.0))
+                auto = bool(body.get("auto_start", False))
+                self._json(200, APP.set_goal(x, y, auto_start=auto))
+                return
+            if path == "/api/nav/confirm" or path == "/api/confirm":
+                self._json(200, APP.confirm())
+                return
+            if path in ("/api/nav/control_mode", "/api/control_mode"):
+                mode = str(body.get("mode") or body.get("control_mode") or "mppi")
+                if hasattr(APP.state, "set_control_mode"):
+                    self._json(200, {"success": True, **APP.state.set_control_mode(mode)})
+                else:
+                    self._json(200, {"success": False, "message": "control_mode unsupported"})
+                return
+            if path in ("/api/nav/plan_quality", "/api/nav/planner_debug"):
+                x = float(body.get("x", 0.0))
+                y = float(body.get("y", 0.0))
+                compare = bool(body.get("compare", True))
+                if hasattr(APP.state, "plan_quality_debug"):
+                    self._json(200, APP.state.plan_quality_debug(x, y, compare=compare))
+                else:
+                    self._json(200, {"success": False, "message": "plan_quality unsupported"})
+                return
+            if path in ("/api/nav/debug", "/api/debug/nav"):
+                if hasattr(APP.state, "get_nav_debug"):
+                    self._json(200, APP.state.get_nav_debug())
+                else:
+                    self._json(200, {"success": False, "message": "debug unsupported"})
+                return
+            if path in ("/api/nav/debug/level", "/api/debug/level"):
+                level = str(body.get("level") or "BASIC")
+                if hasattr(APP.state, "set_debug_level"):
+                    self._json(200, APP.state.set_debug_level(level))
+                else:
+                    self._json(200, {"success": False})
+                return
+            if path in ("/api/nav/debug/freeze", "/api/debug/freeze"):
+                fr = bool(body.get("freeze", body.get("paused", True)))
+                if hasattr(APP.state, "set_debug_freeze"):
+                    self._json(200, APP.state.set_debug_freeze(fr))
+                else:
+                    self._json(200, {"success": False})
+                return
+            if path in ("/api/nav/debug/capture", "/api/debug/capture"):
+                if hasattr(APP.state, "capture_debug"):
+                    self._json(200, APP.state.capture_debug())
+                else:
+                    self._json(200, {"success": False})
+                return
+            if path == "/api/navigate":
+                if "x" in body and "y" in body:
+                    self._json(200, APP.plan_goal(float(body["x"]), float(body["y"])))
+                else:
+                    tid = str(body.get("target_id") or body.get("id") or body.get("poi_id") or "")
+                    self._json(200, APP.navigate_poi(tid) if tid else {"success": False, "message": "缺少点位"})
+                return
+            if path == "/api/scene" or path == "/api/scenes/set":
+                self._json(200, APP.set_scene(str(body.get("id") or body.get("scene") or "indoor_office")))
+                return
+            if path == "/api/cmd_vel":
+                self._json(200, APP.cmd_vel(float(body.get("vx", 0.0)), float(body.get("w", 0.0))))
+                return
+            if path == "/api/cancel":
+                self._json(200, APP.cancel())
+                return
+            if path in ("/api/obstacles/add", "/api/obstacle/add"):
+                r = APP.world.add_dyn_obstacle(
+                    float(body.get("x", 0.0)),
+                    float(body.get("y", 0.0)),
+                    float(body.get("r", 0.4)),
+                    str(body.get("name") or ""),
+                    str(body.get("kind") or "box"),
+                )
+                self._json(200, r)
+                return
+            if path in ("/api/obstacles/remove", "/api/obstacle/remove"):
+                self._json(200, APP.world.remove_dyn_obstacle(str(body.get("name") or "")))
+                return
+            if path == "/api/obstacles/clear":
+                self._json(200, APP.world.clear_dyn_obstacles())
+                return
+            if path in ("/api/pois/add", "/api/poi/add"):
+                self._json(
+                    200,
+                    APP.world.add_poi(
+                        str(body.get("id") or body.get("name") or ""),
+                        float(body.get("x", 0.0)),
+                        float(body.get("y", 0.0)),
+                        str(body.get("kind") or "UserMark"),
+                    ),
+                )
+                return
+            if path in ("/api/pois/remove", "/api/poi/remove"):
+                self._json(200, APP.world.remove_poi(str(body.get("id") or body.get("name") or "")))
+                return
+            if path == "/api/env":
+                self._json(200, {"success": True, "env": APP.snapshot()["env"]})
+                return
+            if path == "/api/maps/robot":
+                self._json(200, {"success": True, "message": "sim map ready"})
+                return
+            if path == "/api/route/status":
+                snap = APP.snapshot()
+                self._json(200, {"route_task": {}, "route": {"stations": []}, "nav": snap.get("nav")})
+                return
+            if path == "/api/agv/lock":
+                self._json(200, {"success": True})
+                return
+            self._json(404, {"success": False, "message": f"unknown {path}"})
+
+    return Handler
+
+
+def main() -> int:
+    global APP
+    if not WWW.exists():
+        print(f"WWW missing: {WWW}")
+        return 1
+    APP = SimApp()
+    handler = make_handler(WWW)
+    srv = ThreadingHTTPServer(("0.0.0.0", 19999), handler)
+    sc = APP.world.scene_info()
+    print("=" * 60, flush=True)
+    print(" AGV V0.1 TRUE SCENE Simulation READY", flush=True)
+    print("  Web:     http://127.0.0.1:19999/", flush=True)
+    print("  Engine:  smap occupancy + dual lidar + Three.js", flush=True)
+    print(f"  Scene:   {sc['kind']} · {sc['name']} · cloud={sc['cloud_count']}", flush=True)
+    print("  Control: API 3055/3056 · lidar 1009", flush=True)
+    print("  Nav:     plan → onboard confirm → go", flush=True)
+    print("=" * 60, flush=True)
+    try:
+        srv.serve_forever()
+    except KeyboardInterrupt:
+        print("\nbye")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -1,0 +1,175 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>Delivery Debug Console :1999</title>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;600&display=swap');
+:root{--bg:#0a0c10;--panel:#12151c;--line:#2a3140;--text:#dce3ee;--muted:#7d8aa0;--accent:#3ecfbe;--warn:#e6b84d;--ok:#5dce86;--bad:#ef6b6b}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font:13px/1.4 "IBM Plex Sans",sans-serif;height:100vh;display:flex;flex-direction:column}
+header{display:flex;justify-content:space-between;align-items:center;padding:.45rem .75rem;border-bottom:1px solid var(--line);background:#0e1218}
+h1{margin:0;font-size:.95rem;letter-spacing:.04em} .sub{color:var(--muted);font-size:.72rem}
+.badge{border:1px solid #3a5a55;color:var(--accent);padding:.1rem .4rem;font-size:.68rem;margin-left:.4rem}
+.layout{flex:1;display:grid;grid-template-columns:1.1fr 1.35fr 1.1fr;min-height:0}
+.col{border-right:1px solid var(--line);display:flex;flex-direction:column;min-height:0}
+.col:last-child{border-right:none}
+.sec{padding:.5rem .65rem;border-bottom:1px solid var(--line)}
+.sec h2{margin:0 0 .4rem;font-size:.68rem;letter-spacing:.1em;text-transform:uppercase;color:var(--muted)}
+.scroll{flex:1;overflow:auto;padding:.45rem .65rem;font-family:"IBM Plex Mono",monospace;font-size:11px}
+table{width:100%;border-collapse:collapse}th,td{border-bottom:1px solid var(--line);padding:.28rem .2rem;text-align:left;vertical-align:top}
+th{color:var(--muted);font-weight:500}td.path{color:var(--accent);cursor:pointer}td.path:hover{text-decoration:underline}
+.tag{display:inline-block;padding:0 .3rem;border:1px solid var(--line);border-radius:2px;font-size:10px}
+.tag.ok{color:var(--ok)} .tag.run{color:var(--warn)} .log{white-space:pre-wrap;color:#b7c4d1}
+.log .k{color:var(--warn)} .log .sys{color:var(--accent)} .log .agv{color:#8ab4ff}
+.btns{display:flex;flex-wrap:wrap;gap:.3rem}
+button{background:#18202a;border:1px solid var(--line);color:var(--text);border-radius:3px;padding:.28rem .5rem;cursor:pointer;font-size:.72rem}
+button:hover{border-color:var(--accent);color:var(--accent)}
+button.danger{border-color:#7a3030;color:var(--bad)}
+input,select{background:#0e141b;border:1px solid var(--line);color:var(--text);border-radius:3px;padding:.25rem .4rem;font-size:.72rem}
+.tree{font-family:"IBM Plex Mono",monospace;font-size:11px}
+.tree details{margin-left:.4rem}
+.tree summary{cursor:pointer;color:var(--muted)}
+.kv{color:var(--text)}.k{color:var(--accent)}
+.watch{background:#0e141b;border:1px solid var(--line);padding:.35rem;margin-bottom:.35rem;border-radius:3px}
+.hz{color:var(--ok);font-variant-numeric:tabular-nums}
+footer{border-top:1px solid var(--line);padding:.3rem .75rem;color:var(--muted);font-size:.68rem;display:flex;justify-content:space-between}
+a{color:var(--accent)}
+</style>
+</head>
+<body>
+<header>
+  <div>
+    <h1>DEBUG CONSOLE <span class="badge">:1999 · dji_gui style</span></h1>
+    <div class="sub" id="meta">参数树 / 订阅Hz / 状态树 / 滚动日志 · 对标大疆车载调试习惯（非抄闭源）</div>
+  </div>
+  <div class="btns">
+    <a href="http://127.0.0.1:19999/" target="_blank"><button>打开演示 :19999</button></a>
+    <button onclick="go('LM2')">NAV LM2</button>
+    <button onclick="go('LM1')">NAV LM1</button>
+    <button onclick="arm('left','pick')">ARM pick</button>
+    <button class="danger" onclick="cancelNav()">CANCEL</button>
+  </div>
+</header>
+<div class="layout">
+  <div class="col">
+    <div class="sec">
+      <h2>Watch / 钉选参数</h2>
+      <div class="btns">
+        <input id="watchAdd" placeholder="agv.x" style="flex:1"/>
+        <button onclick="addWatch()">Add</button>
+      </div>
+    </div>
+    <div class="scroll" id="watchBox"></div>
+    <div class="sec"><h2>状态树 State Tree</h2></div>
+    <div class="scroll tree" id="treeBox"></div>
+  </div>
+  <div class="col">
+    <div class="sec">
+      <h2>Log · auto scroll</h2>
+      <div class="btns">
+        <select id="logFilter"><option value="">ALL</option><option>cmd</option><option>agv</option><option>system</option><option>face</option></select>
+        <select id="logLevel"><option value="">level</option><option>INFO</option><option>WARN</option><option>DEBUG</option><option>ERROR</option></select>
+        <input id="logEvent" placeholder="event" style="width:7rem"/>
+        <button onclick="clearView()">清屏(仅视图)</button>
+        <button onclick="loadFaceLogs()">face jsonl</button>
+        <label class="sub"><input type="checkbox" id="autoScroll" checked/> 底部跟随</label>
+      </div>
+    </div>
+    <div class="scroll log" id="logBox"></div>
+  </div>
+  <div class="col">
+    <div class="sec"><h2>Subscribe List · Hz（enable_rate_stat）</h2></div>
+    <div class="scroll" id="subBox"></div>
+    <div class="sec"><h2>全量参数表 Param List</h2>
+      <input id="paramFilter" placeholder="filter path…" style="width:100%" oninput="renderParams()"/>
+    </div>
+    <div class="scroll" id="paramBox"></div>
+  </div>
+</div>
+<footer>
+  <span id="footL">loading…</span>
+  <span>API: /api/debug /api/logs /api/watch · freeze v0.2.0</span>
+</footer>
+<script>
+let dbg=null, hideBefore=0;
+const $=$=>document.querySelector($);
+function esc(s){return String(s).replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));}
+function renderWatch(){
+  const w=dbg?.watch||[];
+  $('#watchBox').innerHTML=w.map(x=>`<div class="watch"><span class="k">${esc(x.path)}</span><br><span class="kv">${esc(JSON.stringify(x.value))}</span></div>`).join('')||'<div class="sub">空</div>';
+}
+function renderTree(node, depth=0){
+  if(!node) return '';
+  const kids=node.childs||[];
+  const val=node.value!==undefined?`<div class="kv">${esc(JSON.stringify(node.value)).slice(0,180)}</div>`:'';
+  if(!kids.length) return `<div style="margin-left:${depth*8}px">▸ <b>${esc(node.title||'')}</b> <span class="tag">${esc(node.type_name||'')}</span>${val}</div>`;
+  return `<details open style="margin-left:${depth*6}px"><summary>${esc(node.title||'')} <span class="tag">${esc(node.type_name||'')}</span></summary>${val}${kids.map(c=>renderTree(c,depth+1)).join('')}</details>`;
+}
+function renderSubs(){
+  const rows=dbg?.subscriptions||[];
+  $('#subBox').innerHTML=`<table><tr><th>name</th><th>topic</th><th>Hz</th><th>cnt</th><th>auto</th></tr>${
+    rows.map(r=>`<tr><td>${esc(r.name)}</td><td>${esc(r.topic)}</td><td class="hz">${(r.hz||0).toFixed(1)}</td><td>${r.count||0}</td><td>${r.auto?'Y':'-'}</td></tr>`).join('')
+  }</table>`;
+}
+function renderParams(){
+  const f=($('#paramFilter').value||'').toLowerCase();
+  const rows=(dbg?.param_tree||[]).filter(r=>!f||r.path.toLowerCase().includes(f)).slice(0,400);
+  $('#paramBox').innerHTML=`<table><tr><th>path</th><th>value</th></tr>${
+    rows.map(r=>`<tr><td class="path" onclick="pin('${esc(r.path)}')">${esc(r.path)}</td><td>${esc(JSON.stringify(r.value))}</td></tr>`).join('')
+  }</table>`;
+}
+let faceLogCache=null;
+function renderLogs(){
+  const kind=$('#logFilter').value;
+  const level=$('#logLevel').value;
+  const ev=($('#logEvent').value||'').trim();
+  let logs=(dbg?.logs||[]).filter(e=>e.t*1000>=hideBefore && (!kind||e.kind===kind));
+  if(level) logs=logs.filter(e=>String(e.level||'').toUpperCase()===level.toUpperCase());
+  if(ev) logs=logs.filter(e=>String(e.event||'')===ev || String(e.message||'').includes(ev));
+  if(kind==='face' && faceLogCache && faceLogCache.length){
+    logs=faceLogCache.map(r=>({
+      t: typeof r.ts==='number'? r.ts : Date.now()/1000,
+      kind:'face', level:r.level, event:r.event, trace_id:r.trace_id,
+      message:`${r.event||''} ${r.msg||r.message||''} id=${r.person_id||''} conf=${r.confidence??''}`
+    }));
+  }
+  $('#logBox').innerHTML=logs.map(e=>{
+    const t=new Date((e.t||0)*1000).toLocaleTimeString();
+    const cls=e.kind==='cmd'?'k':(e.kind==='system'?'sys':(e.kind==='agv'?'agv':''));
+    const tid=e.trace_id?` <span class="tag" title="click copy" onclick="navigator.clipboard.writeText('${esc(e.trace_id)}')">${esc(e.trace_id)}</span>`:'';
+    return `<div class="${cls}">[${t}] <b>${esc(e.kind)}</b> ${e.event?`<span class="tag">${esc(e.event)}</span> `:''}${esc(e.message||'')}${tid}</div>`;
+  }).join('');
+  if($('#autoScroll').checked){ const el=$('#logBox'); el.scrollTop=0; }
+}
+function render(){
+  if(!dbg) return;
+  const st=dbg.state||{};
+  const f=st.face||{};
+  $('#meta').textContent=`v${st.version||''} · up ${Math.floor(st.uptime_sec||0)}s · face ${f.backend||'-'}/${f.connected?'up':'down'} · peer ${f.peer||'-'} · map ${(st.meta||{}).map_name||'-'}`;
+  $('#footL').textContent=`LIVE ${new Date((st.updated_at||0)*1000).toLocaleTimeString()} · demo :${(st.ports||{}).demo||19999} · debug :${(st.ports||{}).debug||1999} · web_face_api=${st.web_face_api||0}`;
+  renderWatch(); renderSubs(); renderParams(); renderLogs();
+  $('#treeBox').innerHTML=renderTree(dbg.state_tree);
+}
+async function poll(){ try{ dbg=await(await fetch('/api/debug')).json(); render(); }catch(e){ $('#footL').textContent='disconnected'; } }
+function pin(p){ fetch('/api/watch',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({add:p})}).then(poll); }
+function addWatch(){ const p=$('#watchAdd').value.trim(); if(p) pin(p); }
+function clearView(){ hideBefore=Date.now(); faceLogCache=null; renderLogs(); }
+async function loadFaceLogs(){
+  try{
+    const j=await(await fetch('/api/face/logs?limit=50')).json();
+    faceLogCache=j.logs||[];
+    $('#logFilter').value='face';
+    renderLogs();
+  }catch(e){ $('#logBox').textContent='face logs failed '+e; }
+}
+async function go(target){ await fetch('/api/navigate',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({target_id:target,wait:false})}); }
+async function cancelNav(){ await fetch('/api/cancel',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'}); }
+async function arm(arm_name,sequence_name){ await fetch('/api/arm_sequence',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({arm_name,sequence_name})}); }
+$('#logFilter').onchange=renderLogs;
+$('#logLevel').onchange=renderLogs;
+$('#logEvent').oninput=renderLogs;
+poll(); setInterval(poll,400);
+</script>
+</body>
+</html>

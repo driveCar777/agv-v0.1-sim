@@ -1,0 +1,16 @@
+name: empty_room
+description: 4x4 empty room — base sanity check
+map_size: [4.0, 4.0]
+start_pose: [0.0, 0.0, 0.0]
+pickup_pose: [1.5, 0.0, 0.0]
+user_pose: [-1.5, 0.0, 3.14]
+obstacles:
+  - {x: -2.0, y: -2.0, r: 0.05, kind: wall}
+  - {x:  2.0, y: -2.0, r: 0.05, kind: wall}
+  - {x: -2.0, y:  2.0, r: 0.05, kind: wall}
+  - {x:  2.0, y:  2.0, r: 0.05, kind: wall}
+dynamic_obstacles: []
+max_duration_s: 30.0
+fail_conditions:
+  - collision
+  - timeout

@@ -1,0 +1,18 @@
+name: dynamic_obstacle
+description: 动态障碍 — 行人横穿
+map_size: [8.0, 4.0]
+start_pose: [-3.0, 0.0, 0.0]
+pickup_pose: [3.0, 0.0, 0.0]
+user_pose: [-3.0, 0.0, 0.0]
+obstacles:
+  - {x: -4.0, y: -2.0, r: 0.05, kind: wall}
+  - {x:  4.0, y: -2.0, r: 0.05, kind: wall}
+  - {x: -4.0, y:  2.0, r: 0.05, kind: wall}
+  - {x:  4.0, y:  2.0, r: 0.05, kind: wall}
+dynamic_obstacles:
+  - {x:  0.0, y: -2.0, vx: 0.3, vy: 0.6, r: 0.3}
+  - {x:  0.0, y:  2.0, vx: -0.2, vy: -0.6, r: 0.25}
+max_duration_s: 60.0
+fail_conditions:
+  - collision
+  - timeout

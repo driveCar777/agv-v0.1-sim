@@ -1,0 +1,18 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>delivery_web</name>
+  <version>0.1.0</version>
+  <description>Web dashboard for offline delivery robot sim</description>
+  <maintainer email="dev@example.com">delivery</maintainer>
+  <license>Apache-2.0</license>
+  <buildtool_depend>ament_python</buildtool_depend>
+  <depend>rclpy</depend>
+  <depend>ament_index_python</depend>
+  <depend>delivery_interfaces</depend>
+  <depend>std_msgs</depend>
+  <exec_depend>agv_bridge</exec_depend>
+  <export>
+    <build_type>ament_python</build_type>
+  </export>
+</package>

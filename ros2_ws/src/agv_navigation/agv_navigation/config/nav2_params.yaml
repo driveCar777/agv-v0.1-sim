@@ -1,0 +1,243 @@
+﻿# AGV Nav2 参数 — 完全离线/仿真可用
+# 双激光 (front + rear)，差速底盘，室内环境
+
+amcl:
+  ros__parameters:
+    use_sim_time: False
+    base_frame_id: "base_link"
+    odom_frame_id: "odom"
+    global_frame_id: "map"
+    set_initial_pose: true
+    initial_pose: {x: 0.0, y: 0.0, z: 0.0, yaw: 0.0}
+    robot_model_type: "nav2_amcl::DifferentialMotionModel"
+    laser_model_type: "likelihood_field"
+    max_particles: 2000
+    min_particles: 500
+    pf_err: 0.05
+    pf_z: 0.99
+    update_min_d: 0.1
+    update_min_a: 0.2
+    sigma_hit: 0.2
+    laser_max_range: 30.0
+    laser_min_range: -1.0
+    z_hit: 0.5
+    z_max: 0.05
+    z_rand: 0.5
+    z_short: 0.05
+    transform_tolerance: 1.0
+
+bt_navigator:
+  ros__parameters:
+    use_sim_time: False
+    global_frame: "map"
+    robot_base_frame: "base_link"
+    odom_topic: "/odom"
+    enable_stamped_cmd_vel: True
+    default_bt_xml_filename: "navigate_w_replanning_and_recovery.xml"
+    bt_loop_duration: 10
+    default_server_timeout: 20
+    plugin_lib_names:
+      - nav2_compute_path_to_pose_action_bt_node
+      - nav2_follow_path_action_bt_node
+      - nav2_spin_action_bt_node
+      - nav2_wait_action_bt_node
+      - nav2_assisted_teleop_action_bt_node
+      - nav2_back_up_action_bt_node
+      - nav2_drive_on_heading_bt_node
+      - nav2_goal_reached_condition_bt_node
+      - nav2_initial_pose_received_condition_bt_node
+      - nav2_is_stuck_condition_bt_node
+      - nav2_path_expiring_timer_condition_bt_node
+      - nav2_pipeline_sequence_bt_node
+      - nav2_round_robin_node_bt_node
+      - nav2_transform_available_condition_bt_node
+
+controller_server:
+  ros__parameters:
+    use_sim_time: False
+    controller_frequency: 20.0
+    min_x_velocity_threshold: 0.05
+    min_theta_velocity_threshold: 0.05
+    failure_tolerance: 0.3
+    progress_checker_plugin: "progress_checker"
+    goal_checker_plugins: ["goal_checker"]
+    controller_plugins: ["FollowPath"]
+    # 真实局部规划+控制：Nav2 MPPI（采样轨迹 + critic 打分选最优）
+    # https://github.com/ros-navigation/navigation2/tree/main/nav2_mppi_controller
+    FollowPath:
+      plugin: "nav2_mppi_controller::MPPIController"
+      motion_model: "DiffDrive"
+      time_steps: 40
+      model_dt: 0.05
+      batch_size: 800
+      vx_max: 0.45
+      vx_min: -0.25
+      wz_max: 0.9
+      ax_max: 1.5
+      ax_min: -1.5
+      az_max: 2.5
+      temperature: 0.3
+      iteration_count: 1
+      prune_distance: 1.8
+      transform_tolerance: 0.2
+      regenerate_noises: true
+      TrajectoryVisualizer:
+        trajectory_step: 5
+        time_step: 3
+      critics: [
+        "ConstraintCritic",
+        "CostCritic",
+        "GoalCritic",
+        "GoalAngleCritic",
+        "PathAlignCritic",
+        "PathFollowCritic",
+        "PathAngleCritic",
+        "PreferForwardCritic"
+      ]
+      ConstraintCritic:
+        enabled: true
+        cost_power: 1
+        cost_weight: 4.0
+      CostCritic:
+        enabled: true
+        cost_power: 1
+        cost_weight: 3.8
+        critical_cost: 300.0
+        consider_footprint: true
+        collision_cost: 10000.0
+        near_goal_distance: 1.0
+      GoalCritic:
+        enabled: true
+        cost_power: 1
+        cost_weight: 5.0
+        threshold_to_consider: 1.4
+      GoalAngleCritic:
+        enabled: true
+        cost_power: 1
+        cost_weight: 3.0
+        threshold_to_consider: 0.5
+      PathAlignCritic:
+        enabled: true
+        cost_power: 1
+        cost_weight: 14.0
+        max_path_occupancy_ratio: 0.05
+        trajectory_point_step: 4
+        threshold_to_consider: 0.5
+        offset_from_furthest: 20
+        use_path_orientations: false
+      PathFollowCritic:
+        enabled: true
+        cost_power: 1
+        cost_weight: 5.0
+        offset_from_furthest: 5
+        threshold_to_consider: 1.4
+      PathAngleCritic:
+        enabled: true
+        cost_power: 1
+        cost_weight: 2.0
+        offset_from_furthest: 4
+        threshold_to_consider: 0.5
+        max_angle_to_furthest: 1.0
+        mode: 0
+      PreferForwardCritic:
+        enabled: true
+        cost_power: 1
+        cost_weight: 5.0
+        threshold_to_consider: 0.5
+
+planner_server:
+  ros__parameters:
+    use_sim_time: False
+    expected_planner_frequency: 5.0
+    planner_plugins: ["GridBased"]
+    # 真实全局规划：Smac Hybrid-A*（含姿态，可 Reeds-Shepp 倒车段）
+    # https://github.com/ros-navigation/navigation2/tree/main/nav2_smac_planner
+    GridBased:
+      plugin: "nav2_smac_planner::SmacPlannerHybrid"
+      tolerance: 0.25
+      downsample_costmap: false
+      downsampling_factor: 1
+      allow_unknown: true
+      max_iterations: 1000000
+      max_on_approach_iterations: 1000
+      max_planning_time: 5.0
+      motion_model_for_search: "REEDS_SHEPP"
+      angle_quantization_bins: 72
+      minimum_turning_radius: 0.35
+      reverse_penalty: 2.0
+      change_penalty: 0.05
+      non_straight_penalty: 1.2
+      cost_penalty: 1.7
+      retrospective_penalty: 0.015
+      analytic_expansion_ratio: 3.5
+      analytic_expansion_max_length: 3.0
+      lookup_table_size: 20.0
+      cache_obstacle_heuristic: true
+      smooth_path: true
+      smoother:
+        max_iterations: 1000
+        w_smooth: 0.3
+        w_data: 0.2
+        tolerance: 1.0e-10
+        do_refinement: true
+        refinement_num: 2
+
+behavior_server:
+  ros__parameters:
+    use_sim_time: False
+    costmap_topic: local_costmap/costmap
+    footprint_topic: local_costmap/footprint
+    cycle_frequency: 10.0
+    behavior_plugins: ["spin", "backup", "wait"]
+    spin:
+      plugin: "nav2_behaviors::Spin"
+      spin_dist: 1.57
+    backup:
+      plugin: "nav2_behaviors::BackUp"
+      backup_dist: 0.15
+      backup_speed: 0.05
+    wait:
+      plugin: "nav2_behaviors::Wait"
+      wait_duration: 1.0
+
+waypoint_follower:
+  ros__parameters:
+    use_sim_time: False
+    loop_rate: 20
+    stop_on_failure: false
+
+velocity_smoother:
+  ros__parameters:
+    use_sim_time: False
+    smoothing_frequency: 20.0
+    feedback: 20.0
+    min_velocity: [-0.5, -0.0, -1.0]
+    max_velocity: [0.5, 0.0, 1.0]
+    min_acceleration: [-2.5, -0.0, -3.2]
+    max_acceleration: [2.5, 0.0, 3.2]
+    min_jerk: [-5.0, -0.0, -5.0]
+    max_jerk: [5.0, 0.0, 5.0]
+    odom_topic: "odom"
+    odom_duration: 0.1
+
+collision_monitor:
+  ros__parameters:
+    use_sim_time: False
+    base_frame_id: "base_link"
+    odom_frame_id: "odom"
+    cmd_vel_in_topic: "cmd_vel_raw"
+    cmd_vel_out_topic: "cmd_vel_safe"
+    state_topic: "collision_monitor_state"
+    enable_stamped_cmd_vel: True
+    polygon_front_vertices: [0.4, 0.3, 0.4, -0.3]
+    polygon_rear_vertices: [-0.4, 0.3, -0.4, -0.3]
+    observation_sources: ["scan"]
+    scan:
+      source_timeout: 0.5
+      sensor_frame_id: "lidar_front"
+      type: "scan"
+      enabled: true
+      min_obstacle_height: 0.0
+      max_obstacle_height: 2.0
+      obstacle_range: 8.0
+      raytrace_range: 9.0

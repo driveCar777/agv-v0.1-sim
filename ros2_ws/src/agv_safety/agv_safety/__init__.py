@@ -1,0 +1,1 @@
+"""AGV Safety — safety monitor + collision bridge + state machine."""

@@ -1,0 +1,932 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>AGV V0.1 · 真场景仿真</title>
+<script src="https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.min.js"></script>
+<script src="component_system.js?v=20260816m2"></script>
+<script src="nav_ui.js?v=20260816m2"></script>
+<script src="sim3d.js?v=20260816m2"></script>
+<style>
+  :root {
+    --bg: #f4f6f9;
+    --panel: #ffffff;
+    --panel-soft: #f8fafc;
+    --line: rgba(15, 23, 42, 0.1);
+    --text: #0f172a;
+    --muted: #64748b;
+    --accent: #e5364a;
+    --ok: #059669;
+    --warn: #d97706;
+    --indoor: #b45309;
+    --outdoor: #2563eb;
+    --band: #3B82F6;
+    --font: "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+    --serif: "Noto Serif SC", "Songti SC", "SimSun", serif;
+    --shadow: 0 10px 30px rgba(15, 23, 42, 0.08);
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text); font-family: var(--font); overflow: hidden; }
+  #app { display: grid; grid-template-rows: 56px 1fr; height: 100%; }
+  header {
+    display: flex; align-items: center; gap: 10px; padding: 0 14px;
+    border-bottom: 1px solid var(--line); background: #fff; z-index: 20;
+    box-shadow: 0 1px 0 rgba(15,23,42,0.04);
+  }
+  .brand { font-weight: 700; letter-spacing: 0.03em; color: var(--text); }
+  .brand span { color: var(--accent); }
+  .hdr-meta { font-size: 12px; color: var(--muted); }
+  .spacer { flex: 1; }
+  .btn {
+    border: 1px solid var(--line); background: #fff;
+    color: var(--text); border-radius: 8px; padding: 6px 12px; cursor: pointer; font-size: 13px;
+  }
+  .btn:hover { background: #f1f5f9; }
+  .btn-primary { background: var(--accent); border-color: transparent; color: #fff; font-weight: 600; }
+  .btn-primary:hover { filter: brightness(1.05); }
+  .btn.active {
+    border-color: rgba(5, 150, 105, 0.45);
+    color: var(--ok);
+    background: rgba(5, 150, 105, 0.08);
+  }
+  .scene-pill {
+    display: inline-flex; gap: 6px; align-items: center; font-size: 12px;
+    padding: 4px 10px; border-radius: 999px; border: 1px solid var(--line); background: #fff;
+  }
+  .scene-pill.indoor { color: var(--indoor); border-color: rgba(180,83,9,0.35); background: #fff7ed; }
+  .scene-pill.outdoor { color: var(--outdoor); border-color: rgba(37,99,235,0.35); background: #eff6ff; }
+
+  #stage { position: relative; min-height: 0; background: #e8eef5; }
+  #view3d { width: 100%; height: 100%; display: block; touch-action: none; border-radius: 0; }
+
+  #chronicleBanner {
+    position: absolute; top: 16px; left: 50%; transform: translateX(-50%);
+    z-index: 15; min-width: 320px; max-width: min(720px, 86vw);
+    padding: 12px 18px; border-radius: 14px;
+    background: rgba(255,255,255,0.94); border: 1px solid var(--line);
+    box-shadow: var(--shadow); text-align: center; pointer-events: none;
+  }
+  #chronicleBanner .classical {
+    font-family: var(--serif); font-size: 20px; letter-spacing: 0.12em; margin-bottom: 4px; color: #111827;
+  }
+  #chronicleBanner .reason { font-size: 12px; color: var(--muted); }
+  #chronicleBanner[data-level="warn"] { border-color: rgba(217,119,6,0.45); background: #fffbeb; }
+  #chronicleBanner[data-level="danger"] { border-color: rgba(220,38,38,0.4); background: #fef2f2; }
+  #chronicleBanner[data-level="success"] { border-color: rgba(5,150,105,0.4); background: #ecfdf5; }
+
+  #onboardPrompt {
+    display: none; position: absolute; left: 50%; top: 42%; transform: translate(-50%, -50%);
+    z-index: 30; width: min(360px, 90vw); padding: 22px;
+    background: #fff; border: 1px solid var(--line);
+    border-radius: 16px; box-shadow: 0 20px 50px rgba(15,23,42,0.18); text-align: center;
+  }
+  #onboardPrompt.open { display: block; }
+  #onboardPrompt h3 { margin: 0 0 8px; font-size: 18px; }
+  #onboardPrompt p { margin: 0 0 16px; color: var(--muted); font-size: 13px; line-height: 1.5; }
+  #onboardPrompt .actions { display: flex; gap: 10px; justify-content: center; }
+
+  #widgetLayer { position: absolute; inset: 0; pointer-events: none; z-index: 12; }
+  .widget-card {
+    pointer-events: auto; position: absolute; background: var(--panel);
+    border: 1px solid var(--line); border-radius: 12px; overflow: hidden;
+    box-shadow: var(--shadow); display: flex; flex-direction: column;
+    min-width: 220px; min-height: 160px;
+  }
+  .widget-card.nav-expanded { min-width: 640px; }
+  .widget-head {
+    display: flex; align-items: center; gap: 8px; padding: 8px 10px;
+    border-bottom: 1px solid var(--line); cursor: move; user-select: none;
+    font-size: 13px; font-weight: 600; background: var(--panel-soft); color: var(--text);
+  }
+  .widget-head .close { margin-left: auto; border: none; background: transparent; color: var(--muted); cursor: pointer; font-size: 16px; }
+  .widget-body { flex: 1; min-height: 0; padding: 10px; overflow: auto; font-size: 13px; background: #fff; color: var(--text); }
+  .widget-resize {
+    position: absolute; right: 0; bottom: 0; width: 14px; height: 14px; cursor: nwse-resize;
+    background: linear-gradient(135deg, transparent 50%, rgba(15,23,42,0.25) 50%);
+  }
+
+  .hint-bar {
+    position: absolute; left: 14px; bottom: 14px; z-index: 14;
+    font-size: 11px; color: var(--muted); background: rgba(255,255,255,0.92);
+    border: 1px solid var(--line); padding: 6px 10px; border-radius: 8px;
+    pointer-events: none; max-width: min(560px, 72vw); line-height: 1.45;
+    box-shadow: var(--shadow);
+  }
+
+  .field { margin-bottom: 10px; }
+  .field label { display: block; font-size: 11px; color: var(--muted); margin-bottom: 4px; }
+  .field input, .field select {
+    width: 100%; background: #fff; border: 1px solid var(--line);
+    color: var(--text); border-radius: 8px; padding: 7px 9px;
+  }
+  .field input:focus, .field select:focus { outline: 2px solid rgba(37,99,235,0.25); border-color: #93c5fd; }
+  .row { display: flex; gap: 8px; }
+  .row > * { flex: 1; }
+  .poi-list { max-height: 140px; overflow: auto; border: 1px solid var(--line); border-radius: 8px; background: #fff; }
+  .poi-item {
+    padding: 7px 9px; border-bottom: 1px solid var(--line); cursor: pointer;
+    display: flex; justify-content: space-between; gap: 8px;
+  }
+  .poi-item:hover, .poi-item.active { background: #eff6ff; }
+  .poi-item:last-child { border-bottom: none; }
+  .tag { font-size: 10px; color: var(--muted); }
+  .obs-list, .poi-list { background: #fff; }
+
+  .cand-panel {
+    display: flex; gap: 6px; height: 100%; min-height: 120px; overflow-x: auto; padding: 2px;
+  }
+  .cand-col {
+    flex: 0 0 86px; width: 86px; border: 1px solid var(--line); border-radius: 10px;
+    background: rgba(248,250,252,0.72); display: flex; flex-direction: column; overflow: hidden;
+  }
+  .cand-col.best { border-color: #3B82F6; background: rgba(59,130,246,0.08); box-shadow: inset 0 0 0 1px rgba(59,130,246,0.25); }
+  .cand-col .cand-head {
+    font-size: 10px; padding: 6px 6px 2px; color: var(--muted); line-height: 1.3;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .cand-col .cand-conf { font-size: 15px; font-weight: 700; padding: 0 6px 4px; color: #0f172a; }
+  .cand-col.best .cand-conf { color: #2563eb; }
+  .cand-col canvas { flex: 1; width: 100%; min-height: 90px; background: transparent; }
+  .cand-col .cand-mode { font-size: 9px; color: var(--muted); padding: 2px 6px 6px; }
+
+  .widget-card.cand-glass {
+    background: rgba(255,255,255,0.55); backdrop-filter: blur(8px);
+    border: 1px solid rgba(15,23,42,0.08);
+  }
+  .widget-card.cand-glass .widget-body { background: transparent; }
+  .widget-card.cand-glass .widget-head { background: rgba(255,255,255,0.4); }
+  .nav-layout { display: flex; gap: 10px; height: 100%; min-height: 280px; }
+  .nav-layout .nav-left { width: 240px; flex-shrink: 0; overflow: auto; }
+  .nav-layout .nav-map {
+    flex: 1; min-width: 280px; border: 1px solid var(--line); border-radius: 10px;
+    background: #f8fafc; position: relative; overflow: hidden;
+  }
+  .nav-layout .nav-map canvas { width: 100%; height: 100%; display: block; cursor: crosshair; }
+  .nav-map-hint {
+    position: absolute; left: 8px; bottom: 8px; font-size: 10px; color: var(--muted);
+    background: rgba(255,255,255,0.9); padding: 3px 6px; border-radius: 6px; border: 1px solid var(--line);
+  }
+
+  #miniMap, #obsMap, #globalMap {
+    width: 100%; height: 100%; display: block; background: #f1f5f9; border-radius: 8px;
+  }
+
+  #picker {
+    display: none; position: fixed; inset: 0; z-index: 50; background: rgba(15,23,42,0.35);
+    align-items: center; justify-content: center;
+  }
+  #picker.open { display: flex; }
+  #picker .box {
+    width: min(420px, 92vw); background: #fff; border: 1px solid var(--line);
+    border-radius: 14px; padding: 16px; box-shadow: var(--shadow); color: var(--text);
+  }
+  #picker h3 { margin: 0 0 12px; }
+  .pick-item {
+    display: flex; justify-content: space-between; align-items: center;
+    padding: 10px 8px; border-bottom: 1px solid var(--line);
+  }
+  .widget-card.glass {
+    background: rgba(255,255,255,0.52); backdrop-filter: blur(12px) saturate(1.2);
+    -webkit-backdrop-filter: blur(12px) saturate(1.2);
+    border: 1px solid rgba(255,255,255,0.45); box-shadow: 0 8px 28px rgba(15,23,42,0.10);
+  }
+  .widget-card.glass .widget-head {
+    background: rgba(255,255,255,0.35); display: flex; align-items: center; gap: 6px;
+  }
+  .widget-card.glass .widget-head span { flex: 1; font-size: 11px; letter-spacing: 0.06em; text-transform: uppercase; color: #334155; }
+  .widget-card.glass .widget-body { background: transparent; font-size: 12px; }
+  .widget-head .icon-btn {
+    border: none; background: transparent; color: var(--muted); cursor: pointer;
+    width: 22px; height: 22px; border-radius: 6px; font-size: 14px; line-height: 1;
+  }
+  .widget-head .icon-btn:hover { background: rgba(15,23,42,0.06); color: var(--text); }
+  .bb-kv { display: grid; grid-template-columns: 1fr auto; gap: 3px 10px; }
+  .bb-kv .k { color: var(--muted); } .bb-kv .v { font-weight: 600; font-variant-numeric: tabular-nums; }
+  .bb-state {
+    font-size: 22px; font-weight: 700; letter-spacing: 0.04em; margin: 4px 0 10px;
+    padding: 6px 10px; border-radius: 8px; background: rgba(15,23,42,0.04); text-align: center;
+  }
+  .bb-state.FORWARD, .bb-state.ACCELERATING { color: #047857; }
+  .bb-state.TURNING { color: #2563eb; }
+  .bb-state.DECELERATING, .bb-state.RECOVERY { color: #b45309; }
+  .bb-state.REVERSE { color: #7c3aed; }
+  .bb-state.STOPPED { color: #b91c1c; }
+  .bb-note {
+    margin-top: 8px; padding: 6px 8px; border-radius: 8px; font-weight: 700; font-size: 12px;
+    background: rgba(15,23,42,0.05); border: 1px solid var(--line);
+  }
+  .bb-note.cut { background: #fef2f2; color: #b91c1c; }
+  .bb-note.warn { background: #fffbeb; color: #b45309; }
+  .bb-note.ok { background: #ecfdf5; color: #047857; }
+  .bb-chain { display: grid; gap: 4px; font-variant-numeric: tabular-nums; }
+  .bb-chain div { display: flex; justify-content: space-between; gap: 8px; }
+  .bb-chart { width: 100%; height: 160px; background: rgba(15,23,42,0.88); border-radius: 8px; margin-top: 4px; }
+  .bb-chart.sm { height: 90px; }
+  .bb-legend { display: flex; flex-wrap: wrap; gap: 8px; font-size: 10px; color: var(--muted); margin-top: 4px; }
+  .bb-legend i { display: inline-block; width: 8px; height: 8px; border-radius: 2px; margin-right: 3px; }
+  .bb-timeline {
+    max-height: 210px; overflow: auto; font-family: ui-monospace, Consolas, monospace; font-size: 11px;
+  }
+  .bb-tl-row { display: grid; grid-template-columns: 78px 72px 1fr; gap: 6px; padding: 4px 0; border-bottom: 1px solid rgba(15,23,42,0.06); }
+  .bb-tl-cat { font-weight: 700; }
+  .bb-tl-cat.SAFETY, .bb-tl-cat.STOP, .bb-tl-cat.ERROR { color: #b91c1c; }
+  .bb-tl-cat.ACCEL, .bb-tl-cat.MOVE, .bb-tl-cat.PLAN { color: #047857; }
+  .bb-tl-cat.DECEL, .bb-tl-cat.OBSTACLE, .bb-tl-cat.RECOVERY, .bb-tl-cat.REPLAN { color: #b45309; }
+  .bb-tl-cat.TURN, .bb-tl-cat.REVERSE { color: #2563eb; }
+  .dbg-layers { display: flex; flex-wrap: wrap; gap: 6px; margin: 6px 0; }
+  .dbg-layers label { font-size: 11px; display: inline-flex; gap: 4px; align-items: center; }
+  .dbg-cand {
+    border: 1px solid var(--line); border-radius: 8px; padding: 5px 7px; margin-bottom: 4px;
+    background: rgba(248,250,252,0.55); font-size: 11px;
+  }
+  .dbg-cand.sel { border-color: #059669; background: rgba(236,253,245,0.7); }
+</style>
+</head>
+<body>
+<div id="app">
+  <header>
+    <div class="brand">AGV <span>V0.1</span> 真场景仿真</div>
+    <div id="scenePill" class="scene-pill indoor">室内 · 办公室</div>
+    <div class="hdr-meta" id="hdrMeta">加载中…</div>
+    <div class="spacer"></div>
+    <button class="btn active" id="btnFollow" type="button">跟随 · 开</button>
+    <button class="btn" id="btnSceneIndoor" type="button">室内办公室</button>
+    <button class="btn" id="btnSceneOutdoor" type="button">室外园区</button>
+    <button class="btn" id="btnAddWidget" type="button">+ 组件</button>
+    <button class="btn" id="btnCancel" type="button">取消导航</button>
+  </header>
+  <div id="stage">
+    <canvas id="view3d"></canvas>
+    <div id="chronicleBanner" data-level="info">
+      <div class="classical">车止于途，静观四野</div>
+      <div class="reason">待命</div>
+    </div>
+    <div id="onboardPrompt">
+      <h3>车上提示 · 开始导航</h3>
+      <p id="onboardText">路径已规划完成。确认后车辆将循局部蓝色引导带启程。</p>
+      <div class="actions">
+        <button class="btn" id="btnPromptCancel" type="button">取消</button>
+        <button class="btn btn-primary" id="btnPromptGo" type="button">开始</button>
+      </div>
+    </div>
+    <div id="widgetLayer"></div>
+    <div class="hint-bar" id="camHint">跟随：对齐车头正后 · 左键左右拖改视角 · 滚轮逆时针贴近 / 顺时针俯视</div>
+  </div>
+</div>
+
+<div id="picker">
+  <div class="box" style="width:min(520px,94vw);max-height:80vh;overflow:auto">
+    <h3>添加组件</h3>
+    <div id="pickerList"></div>
+    <div style="text-align:right;margin-top:12px"><button class="btn" id="btnPickerClose">关闭</button></div>
+  </div>
+</div>
+
+<script>
+(() => {
+  const $ = (s) => document.querySelector(s);
+  const state = {
+    snap: null,
+    selectedPoi: null,
+    placeObs: false,
+    pendingPoi: null,
+    debugFreeze: false,
+    debugLayers: {
+      off: false,
+      rawPath: true,
+      processedPath: true,
+      executedPath: false,
+      actualTrace: true,
+      mapEvents: true,
+      candidates: true,
+      footprints: true,
+      sectors: true,
+      lookahead: true,
+      collision: true,
+    },
+    debugLevel: 'ADVANCED',
+    lastCapture: null,
+  };
+  const view = new Sim3DView($('#view3d'));
+
+  function syncFollowBtn() {
+    const btn = $('#btnFollow');
+    if (!btn) return;
+    const on = view.follow;
+    btn.classList.toggle('active', on);
+    btn.textContent = on ? '跟随 · 开' : '跟随 · 关';
+    const hint = $('#camHint');
+    if (hint) {
+      hint.textContent = on
+        ? '跟随：左右=绕车 · 上=翻转 · 下=俯视 · 斜向合成 · 滚轮远近 · 3秒回弹'
+        : '自由：左右平移 · 上=翻转 · 下=俯视 · 滚轮远近 · 不回弹';
+    }
+  }
+  view.onFollowChange(syncFollowBtn);
+  $('#btnFollow').onclick = () => { view.toggleFollow(); syncFollowBtn(); };
+  syncFollowBtn();
+
+  async function api(path, opts) {
+    const r = await fetch(path, { headers: { 'Content-Type': 'application/json' }, ...opts });
+    return r.json();
+  }
+
+  function setBanner(b) {
+    if (!b) return;
+    const el = $('#chronicleBanner');
+    el.dataset.level = b.level || 'info';
+    el.querySelector('.classical').textContent = b.classical || '';
+    el.querySelector('.reason').textContent = b.reason || '';
+  }
+
+  function showOnboard(show, text) {
+    const el = $('#onboardPrompt');
+    if (text) $('#onboardText').textContent = text;
+    el.classList.toggle('open', !!show);
+  }
+
+  function updateScenePill(scene) {
+    const pill = $('#scenePill');
+    const indoor = (scene?.kind || 'indoor') === 'indoor';
+    pill.className = 'scene-pill ' + (indoor ? 'indoor' : 'outdoor');
+    pill.textContent = indoor ? `室内 · ${scene?.name || '办公室'}` : `室外 · ${scene?.name || '园区'}`;
+  }
+
+  function applySnap(snap) {
+    state.snap = snap;
+    const agv = snap.agv || {};
+    const nav = snap.nav || {};
+    const scene = snap.scene || {};
+    view.setPose(agv.x || 0, agv.y || 0, agv.angle || 0);
+    // 主视图：仅局部蓝带（无全局折线）
+    view.setGuideBand(nav.local_path || [], '#3B82F6');
+    view.setObstacles(snap.obstacles || []);
+    view.setActors(snap.actors || []);
+    const dbg = snap.debug || {};
+    if (!state.debugFreeze) {
+      view.setDebugOverlay(dbg, agv, state.debugLayers);
+    }
+
+    const mode = snap.perception?.mode || 'panorama_map';
+    const surround = snap.perception?.surround_cloud || [];
+    if (mode === 'live_lidar') {
+      view.setSurroundCloud(surround, true);
+      view.setLiveLidar(snap.laser?.points || surround);
+    } else {
+      view.setSurroundCloud(surround, false);
+      view.setLiveLidar(snap.laser?.points || []);
+    }
+
+    setBanner(snap.banner);
+    updateScenePill(scene);
+    $('#hdrMeta').textContent =
+      `${scene.kind || ''} · ${snap.laser?.label || ''} · ${nav.mode || 'idle'}` +
+      (nav.confidence != null && nav.mode !== 'idle'
+        ? ` · 蓝带${Math.round((nav.confidence || 0) * 100)}% · 候选${(nav.candidates || []).length}`
+        : '') +
+      (nav.stop_reason && nav.stop_reason !== 'NONE' ? ` · ${nav.stop_reason}` : '') +
+      (nav.stuck_s > 0.5 ? ` · stuck${Number(nav.stuck_s).toFixed(0)}s` : '') +
+      (snap.debug?.diagnostics?.primary_reason && snap.debug.diagnostics.primary_reason !== 'NONE'
+        ? ` · WHY:${snap.debug.diagnostics.primary_reason}`
+        : '');
+
+    if (nav.pending_confirm) {
+      showOnboard(true, `全局已规划 · 局部 ${ (nav.candidates||[]).length } 候选。打开「局部候选」组件可看置信度排序。`);
+    } else if (nav.mode !== 'planned') {
+      showOnboard(false);
+    }
+
+    if (window.__agvComps) window.__agvComps.applySnap(snap);
+    else {
+      document.querySelectorAll('.widget-card').forEach((card) => {
+        if (typeof card._onSnap === 'function') card._onSnap(snap);
+      });
+    }
+  }
+
+  async function poll() {
+    try { applySnap(await api('/api/state')); }
+    catch (e) { $('#hdrMeta').textContent = '连接中…'; }
+  }
+
+  $('#btnPromptGo').onclick = async () => { await api('/api/nav/confirm', { method: 'POST', body: '{}' }); showOnboard(false); poll(); };
+  $('#btnPromptCancel').onclick = async () => { await api('/api/cancel', { method: 'POST', body: '{}' }); showOnboard(false); poll(); };
+  $('#btnCancel').onclick = () => $('#btnPromptCancel').onclick();
+  $('#btnSceneIndoor').onclick = async () => { await api('/api/scene', { method: 'POST', body: JSON.stringify({ id: 'indoor_office' }) }); poll(); };
+  $('#btnSceneOutdoor').onclick = async () => { await api('/api/scene', { method: 'POST', body: JSON.stringify({ id: 'outdoor_campus' }) }); poll(); };
+
+  // ---- map drawing helper ----
+  function drawMapCanvas(canvas, snap, opts = {}) {
+    const {
+      showFullPath = true,
+      showLocalOnly = false,
+      showPois = false,
+      showObstacles = true,
+      showActors = false,
+      selectedId = null,
+    } = opts;
+    const parent = canvas.parentElement;
+    const rect = parent.getBoundingClientRect();
+    const dpr = window.devicePixelRatio || 1;
+    canvas.width = Math.max(10, rect.width * dpr);
+    canvas.height = Math.max(10, rect.height * dpr);
+    canvas.style.width = rect.width + 'px';
+    canvas.style.height = rect.height + 'px';
+    const ctx = canvas.getContext('2d');
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    const w = rect.width, h = rect.height;
+    ctx.fillStyle = '#f1f5f9';
+    ctx.fillRect(0, 0, w, h);
+
+    const bounds = snap.map?.bounds || snap.scene?.bounds;
+    if (!bounds) return null;
+    const pad = 14;
+    const bw = Math.max(1e-3, bounds.max_x - bounds.min_x);
+    const bh = Math.max(1e-3, bounds.max_y - bounds.min_y);
+    const scale = Math.min((w - pad * 2) / bw, (h - pad * 2) / bh);
+    const ox = (w - bw * scale) / 2;
+    const oy = (h - bh * scale) / 2;
+    const tx = (x) => ox + (x - bounds.min_x) * scale;
+    const ty = (y) => h - (oy + (y - bounds.min_y) * scale);
+    const inv = (mx, my) => {
+      const x = bounds.min_x + (mx - ox) / scale;
+      const y = bounds.min_y + ((h - my) - oy) / scale;
+      return { x, y };
+    };
+
+    const cloud = snap.map?.cloud || [];
+    ctx.fillStyle = 'rgba(100,116,139,0.55)';
+    const step = Math.max(1, Math.floor(cloud.length / 2800));
+    for (let i = 0; i < cloud.length; i += step) {
+      const p = cloud[i];
+      ctx.fillRect(tx(p.x), ty(p.y), 1.3, 1.3);
+    }
+
+    if (showObstacles) {
+      (snap.obstacles || []).forEach((o) => {
+        ctx.beginPath();
+        ctx.fillStyle = 'rgba(220,38,38,0.35)';
+        ctx.strokeStyle = '#dc2626';
+        ctx.lineWidth = 1.5;
+        ctx.arc(tx(o.x), ty(o.y), Math.max(4, (o.r || 0.4) * scale), 0, Math.PI * 2);
+        ctx.fill(); ctx.stroke();
+      });
+    }
+
+    if (showActors) {
+      (snap.actors || []).forEach((a) => {
+        const ped = (a.kind || '').includes('ped');
+        ctx.beginPath();
+        ctx.fillStyle = ped ? '#f59e0b' : '#0ea5e9';
+        ctx.arc(tx(a.x), ty(a.y), Math.max(3, (a.r || 0.3) * scale * 0.8), 0, Math.PI * 2);
+        ctx.fill();
+      });
+    }
+
+    const pathColor = snap.nav?.path_color || (snap.scene?.kind === 'indoor' ? '#E8B84A' : '#3B82F6');
+    let path = snap.nav?.path || [];
+    if (showLocalOnly) path = snap.nav?.local_path || [];
+    if (showFullPath && path.length > 1) {
+      ctx.strokeStyle = showLocalOnly ? '#3B82F6' : pathColor;
+      ctx.lineWidth = showLocalOnly ? 4 : 2.5;
+      ctx.beginPath();
+      path.forEach((p, i) => (i ? ctx.lineTo(tx(p.x), ty(p.y)) : ctx.moveTo(tx(p.x), ty(p.y))));
+      ctx.stroke();
+    }
+
+    if (showPois) {
+      (snap.pois || []).forEach((p) => {
+        const active = selectedId === p.id;
+        ctx.beginPath();
+        ctx.fillStyle = active ? '#2563eb' : (p.kind === 'UserMark' ? '#7c3aed' : '#0f172a');
+        ctx.arc(tx(p.x), ty(p.y), active ? 5.5 : 4, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.fillStyle = '#334155';
+        ctx.font = '10px sans-serif';
+        ctx.fillText(p.id, tx(p.x) + 6, ty(p.y) - 6);
+      });
+    }
+
+    const agv = snap.agv || {};
+    ctx.fillStyle = '#e5364a';
+    ctx.beginPath();
+    ctx.arc(tx(agv.x || 0), ty(agv.y || 0), 5, 0, Math.PI * 2);
+    ctx.fill();
+
+    return { tx, ty, inv, bounds, scale };
+  }
+
+  function initMapWidget(card) {
+    const body = card.querySelector('.widget-body');
+    body.innerHTML = `
+      <div style="height:calc(100% - 24px);min-height:140px"><canvas id="miniMap"></canvas></div>
+      <div class="tag" id="mapMeta">缩略图 · 室内黄线 / 室外蓝线（全局）</div>`;
+    const canvas = body.querySelector('#miniMap');
+    const draw = (snap) => {
+      drawMapCanvas(canvas, snap, { showFullPath: true, showPois: false });
+      const meta = body.querySelector('#mapMeta');
+      if (meta) {
+        meta.textContent = `${snap.scene?.kind === 'indoor' ? '室内黄线' : '室外蓝线'} · 全局路径在缩略图显示`;
+      }
+    };
+    card._onSnap = draw;
+    card._onResize = () => state.snap && draw(state.snap);
+  }
+
+  function initNavWidget(card) {
+    const body = card.querySelector('.widget-body');
+    card.classList.add('nav-expanded');
+    body.innerHTML = `
+      <div class="nav-layout" id="navLayout">
+        <div class="nav-left">
+          <div class="field"><label>场景（室内↔室外无痕切换）</label>
+            <select id="navScene">
+              <option value="indoor_office">室内 · 办公室（黄线）</option>
+              <option value="outdoor_campus">室外 · 公开园区（蓝线）</option>
+            </select>
+          </div>
+          <div class="field"><label>搜索点位</label>
+            <input id="navSearch" placeholder="LM1 / GATE / DeskA…" />
+          </div>
+          <div class="poi-list" id="poiList"></div>
+          <div class="field" style="margin-top:8px"><label>目标坐标</label>
+            <div class="row"><input id="navX" placeholder="x"/><input id="navY" placeholder="y"/></div>
+          </div>
+          <div class="row">
+            <button class="btn btn-primary" id="btnPlan" type="button">开始导航</button>
+            <button class="btn" id="btnNavCancel" type="button">取消</button>
+          </div>
+          <div class="tag" style="margin-top:8px" id="navHint">右侧全局地图常开：点选已有点，或点空白处命名新点</div>
+        </div>
+        <div class="nav-map" id="navMapPane">
+          <canvas id="globalMap"></canvas>
+          <div class="nav-map-hint">橙=行人 · 青=车辆 · 红=障碍 · 路径：室内黄/室外蓝</div>
+        </div>
+      </div>`;
+
+    const list = body.querySelector('#poiList');
+    const search = body.querySelector('#navSearch');
+    const gcanvas = body.querySelector('#globalMap');
+    let mapProj = null;
+
+    async function refreshPois(q) {
+      const j = await api('/api/pois' + (q ? `?q=${encodeURIComponent(q)}` : ''));
+      list.innerHTML = '';
+      (j.pois || []).forEach((p) => {
+        const div = document.createElement('div');
+        div.className = 'poi-item' + (state.selectedPoi === p.id ? ' active' : '');
+        div.innerHTML = `<span>${p.id}</span><span class="tag">${p.kind}</span>`;
+        div.onclick = () => {
+          state.selectedPoi = p.id;
+          body.querySelector('#navX').value = p.x.toFixed(3);
+          body.querySelector('#navY').value = p.y.toFixed(3);
+          refreshPois(search.value.trim());
+          if (state.snap) drawGlobal(state.snap);
+        };
+        list.appendChild(div);
+      });
+      if (!(j.pois || []).length) list.innerHTML = '<div class="tag" style="padding:8px">无匹配点位</div>';
+    }
+
+    function drawGlobal(snap) {
+      mapProj = drawMapCanvas(gcanvas, snap, {
+        showFullPath: true,
+        showPois: true,
+        showObstacles: true,
+        showActors: true,
+        selectedId: state.selectedPoi,
+      });
+    }
+
+    search.oninput = () => refreshPois(search.value.trim());
+
+    gcanvas.onclick = async (e) => {
+      if (!mapProj || !state.snap) return;
+      const rect = gcanvas.getBoundingClientRect();
+      const mx = e.clientX - rect.left;
+      const my = e.clientY - rect.top;
+      const { x, y } = mapProj.inv(mx, my);
+      const pois = state.snap.pois || [];
+      let hit = null;
+      let best = 0.6;
+      pois.forEach((p) => {
+        const d = Math.hypot(p.x - x, p.y - y);
+        if (d < best) { best = d; hit = p; }
+      });
+      if (hit) {
+        state.selectedPoi = hit.id;
+        body.querySelector('#navX').value = hit.x.toFixed(3);
+        body.querySelector('#navY').value = hit.y.toFixed(3);
+        refreshPois(search.value.trim());
+        drawGlobal(state.snap);
+        return;
+      }
+      const name = prompt(`在 (${x.toFixed(2)}, ${y.toFixed(2)}) 添加点位，请命名：`, `P${Date.now() % 10000}`);
+      if (!name) return;
+      const r = await api('/api/pois/add', {
+        method: 'POST',
+        body: JSON.stringify({ id: name.trim(), x, y, kind: 'UserMark' }),
+      });
+      const hint = body.querySelector('#navHint');
+      if (r.success) {
+        state.selectedPoi = r.poi.id;
+        body.querySelector('#navX').value = r.poi.x.toFixed(3);
+        body.querySelector('#navY').value = r.poi.y.toFixed(3);
+        hint.textContent = `已添加点位 ${r.poi.id}`;
+        await refreshPois('');
+        poll();
+      } else {
+        hint.textContent = r.message || '添加失败';
+      }
+    };
+
+    body.querySelector('#navScene').onchange = async (e) => {
+      await api('/api/scene', { method: 'POST', body: JSON.stringify({ id: e.target.value }) });
+      state.selectedPoi = null;
+      await refreshPois('');
+      poll();
+    };
+    body.querySelector('#btnPlan').onclick = async () => {
+      const hint = body.querySelector('#navHint');
+      let payload = {};
+      if (state.selectedPoi) payload = { poi_id: state.selectedPoi };
+      else {
+        const x = parseFloat(body.querySelector('#navX').value);
+        const y = parseFloat(body.querySelector('#navY').value);
+        if (Number.isNaN(x) || Number.isNaN(y)) { hint.textContent = '请选择点位或填写坐标'; return; }
+        payload = { x, y };
+      }
+      const r = await api('/api/nav/plan', { method: 'POST', body: JSON.stringify(payload) });
+      hint.textContent = r.success
+        ? `规划成功 ${r.waypoints || 0} 航点 · 车上点「开始」`
+        : `规划失败：${r.message || r.api?.err_msg || '无路'}（可换点位或清障碍）`;
+      poll();
+    };
+    body.querySelector('#btnNavCancel').onclick = async () => {
+      await api('/api/cancel', { method: 'POST', body: '{}' });
+      poll();
+    };
+
+    card._onSnap = (snap) => {
+      const sel = body.querySelector('#navScene');
+      if (snap.scene?.id && sel.value !== snap.scene.id) sel.value = snap.scene.id;
+      drawGlobal(snap);
+    };
+    card._onResize = () => state.snap && drawGlobal(state.snap);
+    refreshPois('');
+  }
+
+  function initObstacleWidget(card) {
+    const body = card.querySelector('.widget-body');
+    body.innerHTML = `
+      <div class="field"><label>半径 (m)</label><input id="obsR" type="number" step="0.05" value="0.4"/></div>
+      <div class="field"><label>名称（可选）</label><input id="obsName" placeholder="obs_1"/></div>
+      <div class="row">
+        <button class="btn btn-primary" id="btnObsPlace" type="button">放置模式</button>
+        <button class="btn" id="btnObsClear" type="button">清空</button>
+      </div>
+      <div class="tag" style="margin:8px 0">在下方地图点击放置；列表可删除</div>
+      <div style="height:160px;border:1px solid var(--line);border-radius:8px;overflow:hidden">
+        <canvas id="obsMap"></canvas>
+      </div>
+      <div class="poi-list" id="obsList" style="margin-top:8px;max-height:100px"></div>
+    `;
+    const canvas = body.querySelector('#obsMap');
+    let placing = false;
+    let proj = null;
+
+    const btnPlace = body.querySelector('#btnObsPlace');
+    btnPlace.onclick = () => {
+      placing = !placing;
+      btnPlace.classList.toggle('active', placing);
+      btnPlace.textContent = placing ? '放置中…再点取消' : '放置模式';
+    };
+    body.querySelector('#btnObsClear').onclick = async () => {
+      await api('/api/obstacles/clear', { method: 'POST', body: '{}' });
+      poll();
+    };
+
+    canvas.onclick = async (e) => {
+      if (!placing || !proj || !state.snap) return;
+      const rect = canvas.getBoundingClientRect();
+      const { x, y } = proj.inv(e.clientX - rect.left, e.clientY - rect.top);
+      const r = parseFloat(body.querySelector('#obsR').value) || 0.4;
+      const name = body.querySelector('#obsName').value.trim();
+      await api('/api/obstacles/add', {
+        method: 'POST',
+        body: JSON.stringify({ x, y, r, name }),
+      });
+      poll();
+    };
+
+    function renderList(snap) {
+      const list = body.querySelector('#obsList');
+      list.innerHTML = '';
+      (snap.obstacles || []).forEach((o) => {
+        const div = document.createElement('div');
+        div.className = 'poi-item';
+        div.innerHTML = `<span>${o.name}</span><span class="tag">r=${o.r}</span>`;
+        const del = document.createElement('button');
+        del.className = 'btn';
+        del.textContent = '删';
+        del.style.padding = '2px 8px';
+        del.onclick = async (ev) => {
+          ev.stopPropagation();
+          await api('/api/obstacles/remove', { method: 'POST', body: JSON.stringify({ name: o.name }) });
+          poll();
+        };
+        div.appendChild(del);
+        list.appendChild(div);
+      });
+      if (!(snap.obstacles || []).length) list.innerHTML = '<div class="tag" style="padding:8px">暂无障碍物</div>';
+    }
+
+    card._onSnap = (snap) => {
+      proj = drawMapCanvas(canvas, snap, { showFullPath: false, showObstacles: true, showPois: false });
+      renderList(snap);
+    };
+    card._onResize = () => state.snap && card._onSnap(state.snap);
+  }
+
+  function initLocalPlansWidget(card) {
+    card.classList.add('cand-glass');
+    const body = card.querySelector('.widget-body');
+    body.style.display = 'flex';
+    body.style.flexDirection = 'column';
+    body.innerHTML = `
+      <div class="tag" id="candMeta" style="margin-bottom:6px">左=置信最高=蓝带 · 可拖动/缩放/关闭 · +组件可再添加</div>
+      <div class="cand-panel" id="candPanel" style="flex:1;min-height:110px"></div>`;
+    const panel = body.querySelector('#candPanel');
+    const meta = body.querySelector('#candMeta');
+
+    function drawMini(canvas, path, best) {
+      const dpr = window.devicePixelRatio || 1;
+      const w = canvas.clientWidth || 86;
+      const h = canvas.clientHeight || 90;
+      canvas.width = Math.floor(w * dpr);
+      canvas.height = Math.floor(h * dpr);
+      const ctx = canvas.getContext('2d');
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      ctx.clearRect(0, 0, w, h);
+      if (!path || path.length < 2) return;
+      let minX = 1e9, minY = 1e9, maxX = -1e9, maxY = -1e9;
+      path.forEach((p) => {
+        minX = Math.min(minX, p.x); minY = Math.min(minY, p.y);
+        maxX = Math.max(maxX, p.x); maxY = Math.max(maxY, p.y);
+      });
+      const pad = 8;
+      const span = Math.max(maxX - minX, maxY - minY, 0.8);
+      const s = (Math.min(w, h) - pad * 2) / span;
+      const cx = (minX + maxX) / 2, cy = (minY + maxY) / 2;
+      const tx = (x) => w / 2 + (x - cx) * s;
+      const ty = (y) => h / 2 - (y - cy) * s;
+      ctx.strokeStyle = best ? '#3B82F6' : 'rgba(100,116,139,0.55)';
+      ctx.lineWidth = best ? 2.4 : 1.4;
+      ctx.beginPath();
+      path.forEach((p, i) => (i ? ctx.lineTo(tx(p.x), ty(p.y)) : ctx.moveTo(tx(p.x), ty(p.y))));
+      ctx.stroke();
+      ctx.fillStyle = best ? '#2563eb' : '#94a3b8';
+      ctx.beginPath();
+      ctx.arc(tx(path[0].x), ty(path[0].y), 2.5, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    card._onSnap = (snap) => {
+      const nav = snap.nav || {};
+      const cands = nav.candidates || [];
+      const stuck = Number(nav.stuck_s || 0);
+      meta.textContent =
+        (cands.length ? `${cands.length}条 · 蓝带${Math.round((nav.confidence || 0) * 100)}%` : '尚未规划') +
+        ` · 相位 ${nav.phase || 'forward'}` +
+        (stuck > 0 ? ` · 卡住${stuck.toFixed(1)}s` : '') +
+        (nav.ctrl_note ? ` · ${nav.ctrl_note}` : '');
+      panel.innerHTML = '';
+      if (!cands.length) {
+        panel.innerHTML = '<div class="tag" style="padding:12px">导航规划后显示最多 10 条局部假设（左→右置信度）</div>';
+        return;
+      }
+      cands.forEach((c, idx) => {
+        const col = document.createElement('div');
+        col.className = 'cand-col' + (idx === 0 ? ' best' : '');
+        const pct = Math.round((c.confidence || 0) * 100);
+        col.innerHTML = `
+          <div class="cand-head" title="${c.label || ''}">#${c.id || idx + 1} ${c.label || ''}</div>
+          <div class="cand-conf">${pct}%</div>
+          <canvas></canvas>
+          <div class="cand-mode">${c.mode || 'forward'}</div>`;
+        panel.appendChild(col);
+        drawMini(col.querySelector('canvas'), c.path || [], idx === 0);
+      });
+    };
+    card._onResize = () => state.snap && card._onSnap(state.snap);
+  }
+
+  function initStatusWidget(card) {
+    const body = card.querySelector('.widget-body');
+    card._onSnap = (snap) => {
+      const a = snap.agv || {};
+      const n = snap.nav || {};
+      const vx = Number(a.vx || 0);
+      body.innerHTML = `
+        <div>型号 <b>${a.model || 'AMB-150'}</b></div>
+        <div>位姿 <b>${(a.x??0).toFixed(2)}, ${(a.y??0).toFixed(2)}</b></div>
+        <div>朝向 <b>${(a.yaw_deg??0).toFixed(1)}°</b></div>
+        <div>vx <b>${vx.toFixed(2)}</b> ${vx < -0.02 ? '· 倒车' : ''}</div>
+        <div>电池 <b>${a.battery ?? '—'}%</b></div>
+        <div>导航 <b>${n.mode || 'idle'}${n.pending_confirm ? ' · 待确认' : ''}</b></div>
+        <div>蓝带置信 <b>${n.confidence != null ? Math.round(n.confidence * 100) + '%' : '—'}</b></div>
+        <div>候选 <b>${(n.candidates || []).length}</b> · 局重 ${n.local_replan_count || 0}</div>`;
+    };
+  }
+
+
+  // ---- unified component system ----
+  if (!window.AgvComponentSystem || !window.AgvNavUI) {
+    console.error("Component system failed to load");
+    alert("组件系统脚本加载失败，请强制刷新页面 (Ctrl+F5)");
+  }
+  const navUI = AgvNavUI.install({ state, api, view });
+  const registry = navUI.buildRegistry({
+    nav_mission: initNavWidget,
+    agv_status: initStatusWidget,
+    local_plans: initLocalPlansWidget,
+    obstacles: initObstacleWidget,
+  });
+
+  const comps = AgvComponentSystem.create({
+    layerEl: $("#widgetLayer"),
+    getViewport: () => {
+      const st = $("#stage");
+      return { w: st.clientWidth || window.innerWidth, h: st.clientHeight || window.innerHeight };
+    },
+    registry,
+  });
+  window.__agvComps = comps;
+
+  if (window.AgvComponentSystem && AgvComponentSystem.CSS) {
+    const st = document.createElement("style");
+    st.textContent = AgvComponentSystem.CSS;
+    document.head.appendChild(st);
+  }
+
+  const GROUP_ORDER = ["CORE", "PLANNING", "SAFETY", "CONTROL", "RECOVERY", "DEBUG"];
+  function buildPicker() {
+    const box = $("#pickerList");
+    if (!box) return;
+    box.innerHTML = "";
+    const by = {};
+    Object.entries(registry).forEach(([id, def]) => {
+      const g = def.group || "DEBUG";
+      (by[g] = by[g] || []).push([id, def]);
+    });
+    GROUP_ORDER.forEach((g) => {
+      if (!by[g]) return;
+      const h = document.createElement("div");
+      h.className = "pick-group";
+      h.textContent = g;
+      box.appendChild(h);
+      by[g].forEach(([id, def]) => {
+        const row = document.createElement("div");
+        row.className = "pick-item";
+        row.innerHTML = "<span>" + def.title + '</span><button class="btn btn-primary" type="button">添加</button>';
+        row.querySelector("button").onclick = (ev) => {
+          ev.preventDefault();
+          ev.stopPropagation();
+          try {
+            const card = comps.open(id);
+            if (!card) console.warn("open failed", id);
+          } catch (err) {
+            console.error("open component error", id, err);
+          }
+          $("#picker").classList.remove("open");
+        };
+        box.appendChild(row);
+      });
+    });
+  }
+  buildPicker();
+
+  $("#btnAddWidget").onclick = (e) => {
+    e.preventDefault();
+    $("#picker").classList.add("open");
+  };
+  $("#btnPickerClose").onclick = () => $("#picker").classList.remove("open");
+  $("#picker").addEventListener("click", (e) => {
+    if (e.target.id === "picker") $("#picker").classList.remove("open");
+  });
+
+  ["nav_mission", "local_plans", "obstacles", "agv_status"].forEach((id) => {
+    try {
+      const raw = JSON.parse(localStorage.getItem(AgvComponentSystem.LAYOUT_KEY) || "{}");
+      if (raw[id] && raw[id].open === false) return;
+    } catch (_) {}
+    try { comps.open(id); } catch (err) { console.error(id, err); }
+  });
+
+  setInterval(poll, 250);
+  poll();
+})();
+</script>
+</body>
+</html>

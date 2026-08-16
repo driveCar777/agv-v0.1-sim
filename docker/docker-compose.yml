@@ -1,0 +1,45 @@
+services:
+  # ROS2 Humble：规划/控制（连宿主机 Mock 或真车）
+  ros2_humble:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    image: agv_v01_humble:latest
+    container_name: agv_v01_humble
+    network_mode: bridge
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    environment:
+      - ROS_DOMAIN_ID=0
+      - AGV_BACKEND=${AGV_BACKEND:-tcp}
+      - AGV_HOST=${AGV_HOST:-host.docker.internal}
+      - REAL_ROBOT_ENABLED=${REAL_ROBOT_ENABLED:-false}
+    volumes:
+      - ../ros2_ws/src:/ws/src
+      - ../maps:/ws/maps
+      - ../scripts:/ws/scripts
+      - ../../agv_downloaded:/agv_downloaded:ro
+    ports:
+      - "11311:11311"
+    stdin_open: true
+    tty: true
+    command: bash
+
+  # 可选：在容器内也起 Mock（一般推荐宿主机跑 start_web_sim，便于 Web）
+  mock_api:
+    image: python:3.11-slim
+    container_name: agv_v01_mock
+    profiles: ["mock_in_docker"]
+    working_dir: /app
+    volumes:
+      - ../:/app
+      - ../../agv_downloaded:/agv_downloaded:ro
+    environment:
+      - PYTHONPATH=/app/ros2_ws/src/agv_bridge
+    ports:
+      - "19204:19204"
+      - "19205:19205"
+      - "19206:19206"
+      - "19207:19207"
+      - "19999:19999"
+    command: python scripts/run_web_sim.py

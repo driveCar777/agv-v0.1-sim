@@ -1,0 +1,18 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>agv_navigation</name>
+  <version>0.1.0</version>
+  <description>Nav2 bringup &amp; config for AGV (Smac + Regulated Pure Pursuit + dual lidar).</description>
+  <maintainer email="agv-team@example.com">AGV Team</maintainer>
+  <license>Apache-2.0</license>
+  <depend>nav2_bringup</depend>
+  <depend>nav2_common</depend>
+  <depend>nav2_costmap_2d</depend>
+  <depend>nav2_msgs</depend>
+  <depend>smac_planner</depend>
+  <depend>agv_control</depend>
+  <depend>delivery_interfaces</depend>
+  <test_depend>python3-pytest</test_depend>
+  <export><build_type>ament_python</build_type></export>
+</package>

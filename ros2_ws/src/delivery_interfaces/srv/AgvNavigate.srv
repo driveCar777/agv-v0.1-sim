@@ -1,0 +1,14 @@
+# Navigate AGV to a station (Robokit 3051 path nav)
+string target_id
+string source_id
+string task_id
+float64 angle
+string method
+float64 max_speed
+bool wait_until_done
+float32 timeout_sec
+---
+bool success
+uint8 final_status
+string message
+string task_id

@@ -1,0 +1,2180 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>IndustrialNext AGV Console v0.5</title>
+<link rel="preconnect" href="https://fonts.googleapis.com"/>
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin/>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet"/>
+<style>
+:root{
+  --font-primary:'Inter',-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC','Microsoft YaHei',Roboto,sans-serif;
+  --font-mono:'JetBrains Mono','Fira Code','Cascadia Code',Consolas,monospace;
+  --bg:#FFFFFF; --surface:#F7F8FA; --surface2:#FFFFFF; --line:#E5E7EB;
+  --text:#2D2D2D; --muted:#6B7280; --ok:#10B981; --warn:#F59E0B; --bad:#EF4444;
+  --accent:#E5364A; --accent2:#C42B3D; --accent-light:#FF6B7A; --agv:#E5364A;
+  --brand-black:#111111; --brand-red:#E5364A;
+  --radius-sm:8px; --radius-md:12px; --radius-lg:16px; --radius-xl:20px; --radius-full:9999px; --radius:12px;
+  --space-xs:4px; --space-sm:8px; --space-md:16px; --space-lg:24px; --space-xl:32px;
+  --transition-fast:150ms ease; --transition-normal:250ms ease;
+  --gradient-brand:linear-gradient(135deg,#111111 0%,#2D2D2D 100%);
+  --gradient-red:linear-gradient(135deg,#E5364A 0%,#C42B3D 100%);
+  --gradient-bg:linear-gradient(180deg,#F7F8FA 0%,#FFFFFF 100%);
+  --glass-bg:rgba(255,255,255,0.72); --glass-border:rgba(255,255,255,0.5);
+  --shadow-glass:0 4px 24px rgba(0,0,0,0.06);
+  --header-h:56px;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{height:100%}
+body{
+  font-family:var(--font-primary);background:var(--gradient-bg);color:var(--text);
+  display:flex;flex-direction:column;overflow:hidden;min-height:100vh;
+  -webkit-font-smoothing:antialiased;-moz-osx-font-smoothing:grayscale;
+}
+
+/* Header */
+header.header{
+  position:fixed;top:0;left:0;right:0;min-height:var(--header-h);height:auto;z-index:1000;
+  display:flex;align-items:center;gap:10px;padding:8px 12px;
+  background:rgba(255,255,255,0.92);backdrop-filter:blur(16px);
+  border-bottom:1px solid rgba(0,0,0,0.06);
+  flex-shrink:0;flex-wrap:nowrap;overflow-x:auto;overflow-y:hidden;
+}
+.header-left{display:flex;align-items:center;gap:8px;flex-wrap:nowrap;flex-shrink:0}
+.lock-sw{display:flex;align-items:center;gap:6px;font-size:12px;font-weight:600;color:var(--text);
+  border:1px solid var(--line);border-radius:999px;padding:4px 10px;background:#fff;white-space:nowrap;cursor:pointer}
+.lock-sw input{accent-color:var(--brand-red)}
+.hdr-map{display:flex;align-items:center;gap:6px;flex-shrink:0}
+.hdr-map select{max-width:140px}
+.hdr-chip{font-size:11px;color:var(--muted);white-space:nowrap;font-family:var(--font-mono)}
+.header-logo{display:flex;align-items:baseline;font-size:20px;font-weight:700;letter-spacing:-0.5px;cursor:default;white-space:nowrap}
+.logo-industrial{color:var(--brand-black);font-weight:700}
+.logo-next{color:var(--brand-red);font-weight:700}
+.badge-version{font-size:11px;font-weight:600;padding:3px 10px;border-radius:var(--radius-full);
+  background:rgba(229,54,74,0.08);color:var(--brand-red);border:1px solid rgba(229,54,74,0.15)}
+.status-group{display:flex;align-items:center;gap:6px;font-size:13px;font-weight:500;color:var(--muted)}
+.status-dot{display:inline-block;width:8px;height:8px;border-radius:var(--radius-full);flex-shrink:0}
+.status-dot.online{background:var(--ok);box-shadow:0 0 0 3px rgba(16,185,129,0.15);animation:pulse-green 2s infinite}
+.status-dot.offline{background:var(--bad);box-shadow:0 0 0 3px rgba(239,68,68,0.15)}
+.status-dot.warning{background:var(--warn);box-shadow:0 0 0 3px rgba(245,158,11,0.15)}
+@keyframes pulse-green{0%,100%{box-shadow:0 0 0 3px rgba(16,185,129,0.15)}50%{box-shadow:0 0 0 5px rgba(16,185,129,0.05)}}
+.dot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:4px}
+.dot.on{background:var(--ok)} .dot.warn{background:var(--warn)} .dot.off{background:var(--bad)}
+.badge{font-size:11px;padding:3px 10px;border:1px solid var(--line);border-radius:var(--radius-full);color:var(--muted);white-space:nowrap;font-weight:600}
+.hdr-group{display:flex;align-items:center;gap:var(--space-sm);flex-wrap:wrap}
+.hdr-group label{font-size:12px;color:var(--muted);font-weight:500}
+.hdr-group select{background:#fff;border:1px solid var(--line);color:var(--text);padding:6px 10px;border-radius:var(--radius-sm);font-size:13px;font-family:var(--font-primary)}
+.spacer{flex:1}
+.kv{font-size:12px;color:var(--muted);white-space:nowrap;font-family:var(--font-mono)}
+.header-actions{display:flex;align-items:center;gap:var(--space-sm)}
+
+/* Mode switcher */
+.mode-switcher{display:flex;flex-direction:column;gap:4px;min-width:200px}
+.mode-track{display:flex;background:rgba(0,0,0,0.04);border-radius:var(--radius-full);padding:3px;position:relative}
+.mode-thumb{display:none}
+.mode-seg{
+  flex:1;padding:6px 16px;font-size:13px;font-weight:600;color:var(--muted);
+  border:none;background:transparent;border-radius:var(--radius-full);cursor:pointer;
+  transition:all var(--transition-normal);z-index:1;user-select:none;
+}
+.mode-seg.active{color:#fff;background:var(--gradient-red);box-shadow:0 2px 8px rgba(229,54,74,0.3)}
+.mode-seg:not(.active):hover{color:var(--text);background:rgba(0,0,0,0.03)}
+.mode-meta{font-size:11px;color:var(--muted);line-height:1.35}
+.mode-switcher.busy{opacity:.5;pointer-events:none}
+
+/* Main layout */
+main{flex:1;display:flex;flex-direction:column;min-height:0;overflow:hidden;position:relative;margin-top:var(--header-h)}
+.map-section{flex:1 1 100%;min-height:0;position:relative;background:#F7F8FA}
+#map{display:block;width:100%;height:100%;cursor:grab;background:#F7F8FA}
+#map.dragging{cursor:grabbing}
+#widgetLayer{position:absolute;inset:0;pointer-events:none;z-index:100;overflow:hidden}
+#widgetLayer .widget-card{pointer-events:auto}
+
+/* Widget cards — glassmorphism */
+.widget-card{
+  position:absolute;display:flex;flex-direction:column;
+  background:var(--glass-bg);backdrop-filter:blur(16px) saturate(150%);
+  -webkit-backdrop-filter:blur(16px) saturate(150%);
+  border:1px solid var(--glass-border);border-radius:var(--radius-lg);
+  box-shadow:var(--shadow-glass),0 1px 4px rgba(0,0,0,0.04),inset 0 1px 0 rgba(255,255,255,0.6);
+  overflow:hidden;min-width:200px;min-height:120px;
+  transition:box-shadow var(--transition-normal),transform var(--transition-fast);
+  animation:widget-appear 250ms ease forwards;
+}
+@keyframes widget-appear{from{opacity:0;transform:scale(0.97) translateY(8px)}to{opacity:1;transform:none}}
+.widget-card:hover{box-shadow:0 8px 32px rgba(0,0,0,0.1),0 2px 8px rgba(0,0,0,0.06),inset 0 1px 0 rgba(255,255,255,0.6)}
+.widget-card.dragging,.widget-card.resizing{box-shadow:0 16px 48px rgba(0,0,0,0.12),0 4px 16px rgba(0,0,0,0.08)}
+.widget-card.high-opacity{background:rgba(255,255,255,0.92)}
+.widget-card.minimized .widget-body{display:none}
+.widget-header{
+  display:flex;justify-content:space-between;align-items:center;padding:12px 16px;cursor:grab;
+  border-bottom:1px solid rgba(0,0,0,0.04);background:rgba(255,255,255,0.3);user-select:none;flex-shrink:0;
+}
+.widget-title{font-size:14px;font-weight:600;color:var(--brand-black)}
+.widget-actions{display:flex;gap:4px}
+.widget-actions button{
+  width:24px;height:24px;border-radius:var(--radius-sm);border:none;background:transparent;
+  color:#9CA3AF;cursor:pointer;font-size:15px;padding:0;line-height:1;
+  display:flex;align-items:center;justify-content:center;transition:all var(--transition-fast);
+}
+.widget-actions button:hover{background:rgba(239,68,68,0.1);color:var(--bad)}
+.widget-body{flex:1;overflow:auto;padding:16px;min-height:0;font-size:14px;color:var(--text);display:flex;flex-direction:column}
+
+/* 8-direction resize handles */
+.widget-resize-handle{position:absolute;z-index:20;touch-action:none}
+.widget-resize-handle.resize-n{top:0;left:8px;right:8px;height:8px;cursor:ns-resize}
+.widget-resize-handle.resize-s{bottom:0;left:8px;right:8px;height:8px;cursor:ns-resize}
+.widget-resize-handle.resize-e{right:0;top:8px;bottom:8px;width:8px;cursor:ew-resize}
+.widget-resize-handle.resize-w{left:0;top:8px;bottom:8px;width:8px;cursor:ew-resize}
+.widget-resize-handle.resize-ne{top:0;right:0;width:14px;height:14px;cursor:nesw-resize}
+.widget-resize-handle.resize-nw{top:0;left:0;width:14px;height:14px;cursor:nwse-resize}
+.widget-resize-handle.resize-se{bottom:0;right:0;width:14px;height:14px;cursor:nwse-resize}
+.widget-resize-handle.resize-sw{bottom:0;left:0;width:14px;height:14px;cursor:nesw-resize}
+.widget-resize-handle.resize-se::after,.widget-resize-handle.resize-sw::after{
+  content:'';position:absolute;bottom:4px;right:4px;width:8px;height:8px;
+  border-right:2px solid #9CA3AF;border-bottom:2px solid #9CA3AF;border-radius:0 0 2px 0;pointer-events:none;
+}
+.widget-resize-handle.resize-sw::after{right:auto;left:4px;border-right:none;border-left:2px solid #9CA3AF}
+.widget-card:hover .widget-resize-handle.resize-se::after,.widget-card:hover .widget-resize-handle.resize-sw::after{border-color:#6B7280}
+.widget-adopted{border:none;background:transparent;padding:0;margin:0;width:100%}
+.widget-body .v-card{border:none;background:transparent;box-shadow:none;flex:1;display:flex;flex-direction:column;min-height:0;min-width:0}
+.widget-body .v-card-head{border-bottom:1px solid rgba(0,0,0,0.06);padding:8px 0;flex-shrink:0}
+.widget-body .v-card-body{padding:8px 0;flex:1;display:flex;flex-direction:column;min-height:0;overflow:auto}
+.widget-body .v-card-foot{padding:8px 0 0;border-top:1px solid rgba(0,0,0,0.06);flex-shrink:0}
+.widget-body .cam-view{flex:1 1 auto;min-height:160px;max-height:none;height:auto}
+.widget-body .cam-view img,.widget-body .cam-view canvas{max-width:100%;max-height:none;width:100%;height:100%;object-fit:contain}
+.widget-body .ops-inner,.widget-body .nav-widget-inner{
+  display:flex;flex-direction:column;gap:16px;max-height:none;height:auto;overflow:visible;min-width:0;
+}
+.widget-body .ctrl{min-width:0}
+.widget-body .ctrl .row{flex-wrap:wrap}
+.widget-body .ctrl select,.widget-body .ctrl input{max-width:100%;min-width:0;flex:1 1 160px}
+.widget-card[data-widget-id="nav_control"]{min-width:380px;min-height:340px}
+#widgetSource{position:absolute;left:-9999px;top:0;width:1px;height:1px;overflow:hidden;pointer-events:none;opacity:0}
+
+/* Arm widget */
+.arm-widget{font-size:13px}
+.arm-online{margin-bottom:8px;font-weight:600}
+.arm-online.on{color:var(--ok)} .arm-online.off{color:var(--bad)}
+.arm-progress-track{background:rgba(0,0,0,0.06);height:6px;border-radius:var(--radius-full);overflow:hidden}
+.arm-progress-bar{background:var(--gradient-red);height:100%;width:0;transition:width var(--transition-normal)}
+.arm-block-text{font-size:12px;color:var(--muted);margin:4px 0 8px}
+.arm-joint-bar{display:flex;align-items:center;gap:8px;margin:4px 0;font-size:12px}
+.arm-joint-bar .jl{width:24px;color:var(--muted);font-family:var(--font-mono);font-weight:600}
+.arm-joint-bar .jv{width:52px;color:var(--text);font-family:var(--font-mono)}
+.arm-joint-bar .jt{flex:1;background:rgba(0,0,0,0.06);height:4px;border-radius:var(--radius-full);overflow:hidden}
+.arm-joint-bar .jf{background:var(--brand-red);height:100%}
+.arm-grip-row{margin:6px 0;color:var(--muted);font-size:12px}
+.arm-last-result{font-size:12px;color:var(--muted);margin-bottom:8px;min-height:1.2em}
+.arm-btn-grid{display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;margin-bottom:6px}
+.arm-btn-grid .btn{font-size:12px;padding:6px 8px;min-height:32px}
+.arm-btn-stop{border-color:var(--bad)!important;color:var(--bad)!important}
+.arm-cycles-row{display:flex;align-items:center;gap:8px;margin-bottom:8px;font-size:12px;color:var(--muted)}
+.arm-cycles-sel{background:#fff;border:1px solid var(--line);color:var(--text);border-radius:var(--radius-sm);padding:4px 6px}
+.arm-widget-log{
+  max-height:100px;overflow-y:auto;font-family:var(--font-mono);font-size:11px;
+  border-top:1px solid rgba(0,0,0,0.06);padding-top:8px;background:rgba(17,17,17,0.03);
+  border-radius:var(--radius-sm);padding:8px;margin-top:8px;
+}
+.arm-log-line{margin:2px 0;line-height:1.5}
+.log-time{color:#9CA3AF;margin-right:4px}
+
+/* Widget panel (slide from right) */
+.widget-panel-backdrop{
+  display:none;position:fixed;inset:0;top:var(--header-h);background:rgba(0,0,0,0.15);
+  z-index:998;opacity:0;transition:opacity var(--transition-normal);
+}
+.widget-panel-backdrop.open{display:block;opacity:1}
+.widget-panel{
+  position:fixed;top:var(--header-h);right:0;bottom:0;width:340px;z-index:999;
+  background:rgba(255,255,255,0.85);backdrop-filter:blur(20px) saturate(180%);
+  -webkit-backdrop-filter:blur(20px) saturate(180%);
+  border-left:1px solid rgba(0,0,0,0.06);box-shadow:-4px 0 24px rgba(0,0,0,0.06);
+  transform:translateX(100%);transition:transform var(--transition-normal);
+  overflow-y:auto;display:flex;flex-direction:column;
+}
+.widget-panel.open{transform:translateX(0)}
+.widget-panel-header{padding:20px 24px 16px;border-bottom:1px solid rgba(0,0,0,0.04);display:flex;justify-content:space-between;align-items:flex-start}
+.widget-panel-title{font-size:18px;font-weight:700;color:var(--brand-black);margin:0}
+.widget-panel-subtitle{font-size:13px;color:var(--muted);margin-top:4px}
+.widget-panel-close{background:none;border:none;color:#9CA3AF;font-size:22px;cursor:pointer;line-height:1;padding:0 4px}
+.widget-panel-close:hover{color:var(--brand-black)}
+#widgetPickerList{flex:1}
+.widget-list-item{display:flex;align-items:center;justify-content:space-between;padding:14px 20px;border-bottom:1px solid rgba(0,0,0,0.03);transition:background var(--transition-fast)}
+.widget-list-item:hover{background:rgba(0,0,0,0.02)}
+.widget-list-item-info{display:flex;align-items:center;gap:12px}
+.widget-list-item-icon{width:36px;height:36px;border-radius:var(--radius-md);background:rgba(229,54,74,0.08);color:var(--brand-red);display:flex;align-items:center;justify-content:center;font-size:16px;flex-shrink:0}
+.widget-list-item-name{font-size:14px;font-weight:500;color:var(--text)}
+.widget-add-btn,.widget-remove-btn{padding:6px 14px;font-size:12px;font-weight:600;border-radius:var(--radius-full);border:none;cursor:pointer;transition:all var(--transition-fast);white-space:nowrap;font-family:var(--font-primary)}
+.widget-add-btn{background:var(--gradient-red);color:#fff;box-shadow:0 2px 6px rgba(229,54,74,0.25)}
+.widget-add-btn:hover{transform:translateY(-1px);box-shadow:0 4px 12px rgba(229,54,74,0.35)}
+.widget-remove-btn{background:rgba(0,0,0,0.06);color:var(--muted)}
+.widget-remove-btn:hover{background:rgba(239,68,68,0.08);color:var(--bad)}
+.widget-panel-hint{font-size:11px;color:#9CA3AF;padding:12px 20px 20px}
+.widget-picker-empty{font-size:13px;color:var(--muted);padding:16px 20px}
+.verbose-module-row{display:flex;align-items:center;justify-content:space-between;padding:8px 0;border-bottom:1px solid rgba(0,0,0,0.04)}
+
+/* Log panel */
+.log-panel{font-family:var(--font-mono);font-size:12px;background:rgba(17,17,17,0.03);border-radius:var(--radius-md);padding:12px;max-height:300px;overflow-y:auto}
+.log-panel div{line-height:1.6}
+
+/* AGV status widget */
+.agv-w-row{display:flex;justify-content:space-between;padding:4px 0;font-size:13px;border-bottom:1px solid rgba(0,0,0,0.03)}
+.agv-w-row b{color:var(--brand-black);font-weight:600}
+
+.map-overlay{
+  position:absolute;top:12px;left:12px;
+  background:rgba(255,255,255,0.72);backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);
+  border:1px solid rgba(0,0,0,0.06);border-radius:var(--radius-md);
+  padding:8px 12px;font-size:12px;color:var(--muted);pointer-events:none;z-index:2;max-width:70%;
+  box-shadow:var(--shadow-glass);
+}
+.map-layers{
+  position:absolute;top:52px;left:12px;z-index:6;pointer-events:auto;
+  display:flex;flex-wrap:wrap;gap:8px 12px;align-items:center;
+  background:rgba(255,255,255,0.8);backdrop-filter:blur(12px);
+  border:1px solid rgba(0,0,0,0.06);border-radius:var(--radius-md);
+  padding:6px 10px;font-size:12px;color:var(--text);box-shadow:var(--shadow-glass);
+}
+.map-layers label{display:inline-flex;align-items:center;gap:4px;cursor:pointer;user-select:none}
+.map-tools{position:absolute;top:12px;right:12px;display:flex;gap:6px;z-index:6;pointer-events:auto}
+.map-tools button{
+  background:rgba(255,255,255,0.72);backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);
+  border:1px solid rgba(0,0,0,0.08);color:var(--text);padding:8px 12px;border-radius:var(--radius-md);
+  cursor:pointer;font-size:13px;font-weight:500;min-width:36px;min-height:36px;
+  transition:all var(--transition-fast);font-family:var(--font-primary);
+  box-shadow:var(--shadow-glass);
+}
+.map-tools button:hover{background:rgba(255,255,255,0.9);border-color:rgba(0,0,0,0.12)}
+.map-tools button.active{border-color:var(--brand-red);color:var(--brand-red);background:rgba(229,54,74,0.06)}
+
+/* Legacy panels */
+.vision-strip,.arm-section,.ops-drawer{display:none}
+.v-card{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius-md);display:flex;flex-direction:column;min-width:0;overflow:hidden}
+.v-card-head{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:10px 12px;border-bottom:1px solid var(--line);flex-shrink:0}
+.v-card-head h3{margin:0;font-size:13px;font-weight:600;color:var(--brand-black);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.v-card-body{flex:1;padding:10px 12px;min-height:0;overflow:auto}
+.v-card-foot{padding:10px 12px;border-top:1px solid var(--line);flex-shrink:0}
+.v-card-foot .btn-row{display:flex;gap:8px;flex-wrap:wrap}
+.v-result{font-size:12px;padding:8px 10px;border-radius:var(--radius-sm);margin-bottom:8px;min-height:1.6rem;line-height:1.4;word-break:break-all}
+.v-result.idle{color:var(--muted);background:transparent;border:1px dashed var(--line)}
+.v-result.ok{color:#059669;background:rgba(16,185,129,0.1);border:1px solid rgba(16,185,129,0.25)}
+.v-result.warn{color:#D97706;background:rgba(245,158,11,0.1);border:1px solid rgba(245,158,11,0.25)}
+.v-result.err{color:#DC2626;background:rgba(239,68,68,0.1);border:1px solid rgba(239,68,68,0.25)}
+.v-result.busy{color:var(--brand-red);background:rgba(229,54,74,0.08);border:1px solid rgba(229,54,74,0.2)}
+.v-meta{font-size:11px;color:var(--muted);display:flex;flex-wrap:wrap;gap:6px 10px;line-height:1.45}
+.cam-view{background:#111;border:1px solid var(--line);border-radius:var(--radius-md);display:flex;align-items:center;justify-content:center;overflow:hidden;position:relative;min-height:80px;max-height:120px;margin-bottom:8px}
+.cam-view img,.cam-view canvas{max-width:100%;max-height:120px;object-fit:contain}
+.cam-placeholder{color:#9CA3AF;font-size:12px;text-align:center;padding:8px;position:absolute;inset:0;display:flex;align-items:center;justify-content:center;pointer-events:none}
+.leo-view{background:#0b0f14;min-height:120px}
+.scanner-main{font-size:14px;font-weight:600;margin:4px 0;color:var(--brand-black)}
+.scanner-main.wait{color:var(--muted);font-weight:500;font-size:13px}
+.scanner-detail{font-size:11px;color:var(--muted);display:grid;grid-template-columns:1fr 1fr;gap:4px 8px}
+.scanner-detail b{color:var(--text)}
+.leo-box{min-height:80px;display:flex;align-items:center;justify-content:center;text-align:center;color:var(--muted);font-size:13px;padding:8px}
+.loc-match{color:var(--ok)} .loc-mismatch{color:var(--bad)} .loc-unknown{color:var(--muted)}
+
+/* Buttons */
+button.btn{
+  display:inline-flex;align-items:center;justify-content:center;gap:8px;
+  padding:8px 16px;font-size:13px;font-weight:600;font-family:var(--font-primary);
+  border-radius:var(--radius-md);border:1px solid var(--line);background:#fff;color:var(--text);
+  cursor:pointer;transition:all var(--transition-fast);white-space:nowrap;flex-shrink:0;min-height:34px;
+}
+button.btn:hover{border-color:rgba(0,0,0,0.15);background:var(--surface)}
+button.btn.primary{background:var(--gradient-red);border-color:transparent;color:#fff;box-shadow:0 2px 8px rgba(229,54,74,0.25)}
+button.btn.primary:hover{transform:translateY(-1px);box-shadow:0 4px 16px rgba(229,54,74,0.35)}
+button.btn.primary:active{transform:none;background:var(--accent2)}
+button.btn.trigger{flex:1;min-width:100px}
+button.btn:disabled{opacity:.5;cursor:not-allowed;transform:none;box-shadow:none}
+.btn-sm{padding:5px 12px;font-size:12px;border-radius:var(--radius-sm);min-height:30px}
+
+/* Ops drawer */
+.ops-inner{display:grid;grid-template-columns:1fr 1fr;gap:0;max-height:20vh;overflow:auto}
+.ctrl{padding:12px 16px}
+.ctrl h3{margin:0 0 8px;font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;font-weight:600}
+.row{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:8px}
+select,input[type=text],input[type=number]{
+  background:#fff;border:1px solid var(--line);color:var(--text);
+  padding:8px 10px;border-radius:var(--radius-sm);font-size:13px;font-family:var(--font-primary);
+}
+.route-checks{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:8px;max-height:140px;overflow:auto}
+.route-ck{display:inline-flex;align-items:center;gap:4px;font-size:12px;border:1px solid var(--line);border-radius:var(--radius-sm);padding:4px 8px;background:#fff;cursor:pointer}
+.route-ck input{margin:0}
+.chip .ord{cursor:pointer;color:var(--muted);padding:0 2px}
+.chip{background:var(--surface);border:1px solid var(--line);padding:4px 10px;border-radius:var(--radius-sm);font-size:12px;display:flex;align-items:center;gap:4px}
+.chip .rm{cursor:pointer;color:var(--bad)}
+.route-status{font-size:13px;padding:8px 10px;background:var(--surface);border:1px solid var(--line);border-radius:var(--radius-sm);margin-top:6px}
+.route-status .done{color:var(--ok)}
+.station-list{font-size:12px;color:var(--text);max-height:220px;overflow:auto;display:flex;flex-direction:column;gap:6px}
+.st-row{display:grid;grid-template-columns:1fr auto;gap:6px;align-items:start;padding:8px;border:1px solid var(--line);border-radius:var(--radius-sm);background:#fff}
+.st-row.active{border-color:var(--brand-red);background:rgba(229,54,74,0.04)}
+.st-name{font-weight:600;cursor:pointer}
+.st-meta{font-size:11px;color:var(--muted);margin-top:2px}
+.st-actions{display:flex;flex-wrap:wrap;gap:4px}
+
+/* Toast */
+#toastHost{position:fixed;top:calc(var(--header-h) + 12px);right:12px;z-index:9999;display:flex;flex-direction:column;gap:8px;pointer-events:none;max-width:360px}
+
+/* 文言编年：地图中上方 */
+#chronicleBanner{
+  position:absolute;top:18px;left:50%;transform:translateX(-50%);
+  z-index:40;min-width:min(720px,92vw);max-width:920px;
+  text-align:center;pointer-events:none;
+  padding:14px 22px 12px;border-radius:14px;
+  background:rgba(255,252,245,0.92);
+  border:1px solid rgba(120,90,40,0.22);
+  box-shadow:0 10px 36px rgba(40,30,10,0.12);
+  backdrop-filter:blur(10px);
+}
+#chronicleBanner .classical{
+  font-family:"Songti SC","Noto Serif SC","STSong","SimSun",serif;
+  font-size:22px;letter-spacing:0.12em;color:#2a2118;line-height:1.35;
+  font-weight:600;
+}
+#chronicleBanner .reason{
+  margin-top:6px;font-size:13px;color:#6b5a45;letter-spacing:0.04em;
+  font-family:"Source Han Sans SC","PingFang SC","Microsoft YaHei",sans-serif;
+}
+#chronicleBanner[data-level="warn"]{border-color:rgba(180,120,20,0.35);background:rgba(255,248,230,0.94)}
+#chronicleBanner[data-level="danger"]{border-color:rgba(180,40,40,0.35);background:rgba(255,240,238,0.94)}
+#chronicleBanner[data-level="success"]{border-color:rgba(40,120,70,0.3);background:rgba(240,255,246,0.94)}
+#goalHint{
+  position:absolute;bottom:18px;left:50%;transform:translateX(-50%);z-index:35;
+  padding:8px 14px;border-radius:999px;font-size:12px;
+  background:rgba(17,17,17,0.72);color:#fff;pointer-events:none;
+}
+
+.toast{
+  padding:12px 16px;border-radius:var(--radius-md);font-size:13px;line-height:1.4;
+  box-shadow:0 8px 32px rgba(0,0,0,0.1);pointer-events:auto;
+  border:1px solid var(--line);background:rgba(255,255,255,0.95);
+  backdrop-filter:blur(12px);animation:toastIn .2s ease;
+}
+.toast.ok{border-color:rgba(16,185,129,0.3);background:rgba(16,185,129,0.06)}
+.toast.warn{border-color:rgba(245,158,11,0.3)}
+.toast.err{border-color:rgba(239,68,68,0.3)}
+.toast.info{border-color:rgba(59,130,246,0.3)}
+@keyframes toastIn{from{opacity:0;transform:translateY(-8px)}to{opacity:1;transform:none}}
+
+/* Modal */
+.modal{display:none;position:fixed;inset:0;background:rgba(0,0,0,0.35);align-items:center;justify-content:center;z-index:1100;backdrop-filter:blur(4px)}
+.modal.show{display:flex}
+.modal-box{
+  background:rgba(255,255,255,0.95);backdrop-filter:blur(20px);
+  border:1px solid rgba(0,0,0,0.08);border-radius:var(--radius-lg);
+  padding:24px;min-width:300px;box-shadow:0 16px 48px rgba(0,0,0,0.12);
+}
+.modal-box h4{margin:0 0 12px;font-size:18px;font-weight:700;color:var(--brand-black)}
+
+/* Scrollbar */
+::-webkit-scrollbar{width:6px;height:6px}
+::-webkit-scrollbar-track{background:transparent}
+::-webkit-scrollbar-thumb{background:rgba(0,0,0,0.12);border-radius:var(--radius-full)}
+::-webkit-scrollbar-thumb:hover{background:rgba(0,0,0,0.2)}
+*{scrollbar-width:thin;scrollbar-color:rgba(0,0,0,0.12) transparent}
+
+@media(max-width:1199px){.widget-card{min-width:240px}}
+@media(max-width:768px){
+  header.header{padding:0 var(--space-md)}
+  .header-logo{font-size:16px}
+  .widget-panel{width:100%}
+  .mode-seg{padding:5px 12px;font-size:12px}
+}
+@media(max-width:1200px){.ops-inner{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<header class="header">
+  <div class="header-left">
+    <div class="header-logo" title="IndustrialNext">
+      <span class="logo-industrial">Industrial</span><span class="logo-next">Next</span>
+    </div>
+    <button type="button" id="btnAddWidget" class="btn btn-primary btn-sm">+ 组件</button>
+    <div class="hdr-group status-group">
+      <span id="agvDot" class="status-dot offline"></span>
+      <span id="agvStatus">LOADING</span>
+    </div>
+    <label class="lock-sw" title="Robokit 4005/4006 控制权">
+      <input type="checkbox" id="ctlLock" checked/> 控制权
+    </label>
+  </div>
+  <div class="hdr-map">
+    <select id="mapSel"></select>
+    <button class="btn btn-sm" id="btnRefreshMap">刷新地图</button>
+  </div>
+  <span class="hdr-chip" id="adapterStatus">Robokit: —</span>
+  <span class="hdr-chip" id="hdrVehicle">电量 —</span>
+  <span class="hdr-chip" id="hdrPose">X —</span>
+  <span class="hdr-chip" id="hdrMeta">—</span>
+  <span id="demoAgvInfo" style="display:none"></span>
+</header>
+
+<main>
+  <section class="map-section">
+    <canvas id="map"></canvas>
+    <div id="chronicleBanner" data-level="info">
+      <div class="classical" id="chronicleClassical">车止于途，静观四野</div>
+      <div class="reason" id="chronicleReason">待命 · 点击地图设点即可导航</div>
+    </div>
+    <div id="goalHint">单击地图设目标点 · 双对角雷达感知 · API 3055 控车</div>
+    <div class="map-overlay" id="mapOverlay">STATIC MAP · NO LIVE LIDAR</div>
+    <div class="map-layers" id="mapLayers">
+      <label><input type="checkbox" id="layerMap" checked/> 地图点云</label>
+      <label><input type="checkbox" id="layerLidar" checked/> 实时激光</label>
+      <label>点云透明度 <input type="range" id="layerLidarAlpha" min="20" max="100" value="70" style="width:72px"/></label>
+    </div>
+    <div id="widgetLayer"></div>
+    <div class="map-tools">
+      <button id="btnFollow" class="active" title="跟随 AGV">跟随</button>
+      <button id="btnZoomIn">+</button>
+      <button id="btnZoomOut">−</button>
+    </div>
+  </section>
+
+  <div id="widgetSource">
+  <section class="vision-strip">
+    <article class="v-card" id="cardFloor">
+      <div class="v-card-head">
+        <h3>Floor QR · Keyence</h3>
+        <span class="badge" id="floorQrBadge">—</span>
+      </div>
+      <div class="v-card-body">
+        <div class="v-result idle" id="floorQrResult">点击「触发扫码」开始</div>
+        <div class="v-meta"><span id="floorQrDevice">—</span></div>
+        <div class="scanner-main wait" id="floorQrMain">WAITING FOR QR</div>
+        <div class="scanner-detail">
+          <div>Last QR: <b id="floorQrId">—</b></div>
+          <div>Last Scan: <b id="floorQrTime">—</b></div>
+          <div>AGV Pose: <b id="floorQrAgvPose">—</b></div>
+          <div>Expected: <b id="floorQrExpPose">—</b></div>
+          <div>Pos Err: <b id="floorQrPosErr">—</b></div>
+          <div>Ang Err: <b id="floorQrAngErr">—</b></div>
+          <div>Loc: <b id="floorQrLoc" class="loc-unknown">UNKNOWN</b></div>
+    </div>
+      </div>
+      <div class="v-card-foot">
+        <div class="btn-row">
+          <button class="btn primary trigger" id="btnFloorTrigger" data-action="floor-trigger">触发扫码</button>
+    </div>
+      </div>
+    </article>
+
+    <article class="v-card" id="cardWrist">
+      <div class="v-card-head">
+        <h3>Wrist Camera · Pylon 腕部</h3>
+        <span class="badge" id="wristBadge">—</span>
+    </div>
+      <div class="v-card-body">
+        <div class="v-result idle" id="wristQrResult">二维码：等待触发</div>
+        <div class="v-result idle" id="wristTagResult">AprilTag：等待触发</div>
+        <div class="cam-view" id="wristView">
+          <img id="wristImg" alt="Wrist" style="display:none"/>
+          <div class="cam-placeholder" id="wristPlaceholder">—</div>
+      </div>
+        <div class="v-meta">
+          <span id="wristFps">FPS: —</span>
+          <span id="wristRos">ROS: —</span>
+          <span id="wristDet">QR: —</span>
+          <span id="wristTagDet">Tag: —</span>
+          <span id="wristTagPose">角度: —</span>
+      </div>
+      </div>
+      <div class="v-card-foot">
+        <div class="btn-row">
+          <button class="btn primary trigger" id="btnWristQrTrigger" data-action="wrist-qr">触发二维码</button>
+          <button class="btn trigger" id="btnWristTagTrigger" data-action="wrist-tag">触发 AprilTag</button>
+      </div>
+    </div>
+    </article>
+
+    <article class="v-card" id="cardLeo">
+      <div class="v-card-head">
+        <h3>Leo Face</h3>
+        <span class="badge" id="leoBadge">DEVELOPING</span>
+      </div>
+      <div class="v-card-body">
+        <div class="v-result idle" id="leoResult">等待 Jetson face_executor…</div>
+        <div class="cam-view leo-view" id="leoPanel">
+          <canvas id="leoCanvas" width="488" height="408" style="display:none"></canvas>
+          <div class="cam-placeholder" id="leoPlaceholder">Leo 本版不提供视频流<br/>（文档：MJPEG 暂不接入）</div>
+        </div>
+        <div class="v-meta" id="leoMeta">—</div>
+      </div>
+      <div class="v-card-foot">
+        <div class="btn-row">
+          <button class="btn primary" id="btnLeoStart">连续识别开</button>
+          <button class="btn" id="btnLeoStop">连续识别关</button>
+          <button class="btn trigger" id="btnLeoTrigger" data-action="leo-face">读取最新结果</button>
+        </div>
+      </div>
+    </article>
+  </section>
+
+  <section class="arm-section">
+    <div class="arm-panel">
+      <h3>Robot Arm <span class="badge" id="armBadge">OFFLINE</span></h3>
+      <canvas id="armCanvas" width="320" height="130"></canvas>
+      <div class="v-meta" id="armModeMeta">Mode: SIMULATION</div>
+      </div>
+    <div class="arm-panel">
+      <h3>Joint / TCP State</h3>
+      <div id="armJointList" class="arm-tcp">Loading…</div>
+      <div id="armTcpPose" class="arm-tcp" style="margin-top:.35rem">TCP: —</div>
+      <div id="armGripper" class="arm-tcp">Gripper: —</div>
+    </div>
+    <div class="arm-panel">
+      <h3>Simulation Control</h3>
+      <label style="font-size:.7rem;color:var(--muted)"><input type="checkbox" id="armKeepTcp"/> Keep TCP Fixed</label>
+      <div id="armJointControls"></div>
+      <div class="row" style="margin-top:.35rem">
+        <button class="btn" id="btnArmStop">Stop</button>
+      </div>
+      <div class="v-meta" id="armLastText">—</div>
+    </div>
+  </section>
+
+  <details class="ops-drawer">
+    <summary>导航 / 路线 / 站点管理 ▾</summary>
+    <div class="ops-inner">
+      <div class="ctrl">
+        <h3>单站导航</h3>
+        <div class="row">
+          <select id="navStation"></select>
+          <button class="btn primary" id="btnNavGo">前往</button>
+          <button class="btn" id="btnCancel">取消导航</button>
+    </div>
+        <h3 style="margin-top:.5rem">QR 识别（持续模式）</h3>
+        <div class="row">
+          <button class="btn" id="btnQrStart">腕部识别开</button>
+          <button class="btn" id="btnQrStop">腕部识别关</button>
+        </div>
+        <h3 style="margin-top:.5rem">站点管理</h3>
+        <div class="row">
+          <button class="btn" id="btnAddStation">新增站点</button>
+        </div>
+        <div class="station-list" id="stationList"></div>
+      </div>
+      <div class="ctrl">
+        <h3>路线（勾选加入，箭头排序）</h3>
+        <div class="route-checks" id="routeChecks"></div>
+        <div class="route-chips" id="routeChips"></div>
+        <div class="row" style="margin-top:.4rem">
+          <button class="btn" id="btnRouteClear">清空路线</button>
+          <button class="btn primary" id="btnRouteStart">按顺序开始路线</button>
+        </div>
+        <div class="route-status" id="routeStatus">路线未启动</div>
+      </div>
+    </div>
+  </details>
+  </div><!-- /widgetSource -->
+</main>
+
+<div id="toastHost"></div>
+
+<div class="modal" id="stationModal">
+  <div class="modal-box">
+    <h4>新增站点</h4>
+    <div class="row"><label>名称</label><input type="text" id="newStName" placeholder="TEST1"/></div>
+    <div class="row"><label>X</label><input type="number" id="newStX" step="0.01" value="0"/></div>
+    <div class="row"><label>连接到</label><select id="newStLink"></select></div>
+    <div class="st-meta" style="margin-bottom:8px">必须连到已有 LM（如 LM7），否则 3051 会失败（状态=5）</div>
+    <div class="row">
+      <button class="btn primary" id="btnSaveStation">保存</button>
+      <button class="btn" id="btnCancelStation">取消</button>
+    </div>
+    </div>
+    </div>
+
+<div class="modal" id="renameModal">
+  <div class="modal-box">
+    <h4>重命名站点</h4>
+    <div class="row"><label>原名称</label><input type="text" id="renameOld" readonly/></div>
+    <div class="row"><label>新名称</label><input type="text" id="renameNew" placeholder="LM10"/></div>
+    <div class="row">
+      <button class="btn primary" id="btnSaveRename">保存</button>
+      <button class="btn" id="btnCancelRename">取消</button>
+    </div>
+  </div>
+</div>
+
+<div class="widget-panel-backdrop" id="widgetPickerBackdrop"></div>
+<div class="widget-panel" id="widgetPicker">
+  <div class="widget-panel-header">
+    <div>
+      <h4 class="widget-panel-title">添加组件</h4>
+      <div class="widget-panel-subtitle">选择要显示在地图上的悬浮组件</div>
+    </div>
+    <button type="button" class="widget-panel-close" id="btnWidgetPickerClose" title="关闭">×</button>
+  </div>
+  <div id="widgetPickerList"></div>
+  <div class="widget-panel-hint">提示：点击组件卡片右上角 × 也可关闭</div>
+</div>
+
+<script src="widgets.js"></script>
+<script src="arm_widget.js"></script>
+<script src="verbose_log_widget.js"></script>
+<script>
+const $ = s => document.querySelector(s);
+let state = null;
+let routeDraft = [];
+const FETCH_TIMEOUT_MS = 12000;
+const STATE_POLL_MS = 2500;
+const HEARTBEAT_MS = 800;
+let wristSnapUrl = null;
+let wristSnapBusy = false;
+let wristSnapMiss = 0;
+let followAGV = true;
+let view = { cx: 0, cy: 0, scale: 1.0 };
+let drag = null;
+let mapReady = false;
+let tempStation = null;
+let mapDragMoved = false;
+let selectedNavStation = '';
+let mapLayers = { map: true, lidar: true, lidarAlpha: 0.7 };
+
+function showToast(msg, kind = 'info', ms = 4000) {
+  const host = $('#toastHost');
+  if (!host) return;
+  const el = document.createElement('div');
+  el.className = `toast ${kind}`;
+  el.textContent = msg;
+  host.appendChild(el);
+  setTimeout(() => { el.style.opacity = '0'; setTimeout(() => el.remove(), 300); }, ms);
+}
+
+function setResult(el, text, kind = 'idle') {
+  if (!el) return;
+  el.textContent = text;
+  el.className = `v-result ${kind}`;
+}
+
+function bindVisionActions() {
+  document.body.addEventListener('click', e => {
+    const btn = e.target.closest('[data-action]');
+    if (!btn || btn.disabled) return;
+    const act = btn.dataset.action;
+    if (act === 'floor-trigger') return triggerFloorScan(btn);
+    if (act === 'wrist-qr') return visionTrigger('/api/vision/wrist_camera/trigger/qr', 'qr', btn);
+    if (act === 'wrist-tag') return visionTrigger('/api/vision/wrist_camera/trigger/apriltag', 'tag', btn);
+    if (act === 'leo-face') return visionTrigger('/api/vision/leo_face/trigger', 'leo', btn);
+  });
+}
+
+async function triggerFloorScan(btn) {
+  btn.disabled = true;
+  setResult($('#floorQrResult'), '扫码中…', 'busy');
+  showToast('地面扫码触发中…', 'info', 2500);
+  try {
+    const j = await (await fetch('/api/vision/floor_qr/trigger', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}',
+      signal: AbortSignal.timeout(12000),
+    })).json();
+    if (j.success) {
+      const msg = j.message || j.result || 'OK';
+      setResult($('#floorQrResult'), `扫码成功: ${msg}`, 'ok');
+      showToast(`扫码: ${msg}`, 'ok');
+    } else {
+      const err = j.message || '扫码失败';
+      setResult($('#floorQrResult'), err, 'err');
+      showToast(err, 'err', 6000);
+    }
+    pollState();
+  } catch (e) {
+    setResult($('#floorQrResult'), '请求超时或失败', 'err');
+    showToast('扫码请求失败', 'err');
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+function visionTrigger(url, label, btn) {
+  if (btn) btn.disabled = true;
+  const waitHint = '识别中（最多 5 秒）…';
+  if (label === 'qr') setResult($('#wristQrResult'), waitHint, 'busy');
+  if (label === 'tag') setResult($('#wristTagResult'), waitHint, 'busy');
+  if (label === 'leo') setResult($('#leoResult'), waitHint, 'busy');
+  showToast(waitHint, 'info', 2000);
+  fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}', signal: AbortSignal.timeout(label === 'leo' ? 8000 : 12000) })
+    .then(r => r.json())
+    .then(j => {
+      const msg = j.message || j.result || (j.found ? 'OK' : 'NOT_FOUND');
+      const ok = label === 'leo'
+        ? (j.success === true && (j.found === true || j.status === 'OK' || j.status === 'NO_FACE'))
+        : (j.success !== false && j.found === true);
+      if (label === 'qr') {
+        const t = j.found ? `二维码: ${msg}` : `未找到二维码 (${msg})`;
+        setResult($('#wristQrResult'), t, j.found ? 'ok' : 'warn');
+        $('#wristDet').textContent = j.found ? `QR: ${msg}` : 'QR: NOT_FOUND';
+      }
+      if (label === 'tag') {
+        const t = j.found ? `AprilTag: ${msg}` : `未找到 Tag (${msg})`;
+        setResult($('#wristTagResult'), t, j.found ? 'ok' : 'warn');
+        $('#wristTagDet').textContent = j.found ? `Tag: ${msg}` : 'Tag: NOT_FOUND';
+      }
+      if (label === 'leo') {
+        const kind = j.found ? 'ok' : (j.success ? 'warn' : 'err');
+        setResult($('#leoResult'), msg, kind);
+        $('#leoMeta').textContent = msg;
+      }
+      showToast(msg, label === 'leo' ? (j.found ? 'ok' : (j.success ? 'warn' : 'err')) : (ok ? 'ok' : 'warn'), 5000);
+      if (!j.found && label !== 'leo') {
+        showToast('未检测到目标，请调整相机角度或光照', 'warn', 4000);
+      }
+      pollState();
+    })
+    .catch(() => {
+      if (label === 'qr') setResult($('#wristQrResult'), '请求失败', 'err');
+      if (label === 'tag') setResult($('#wristTagResult'), '请求失败', 'err');
+      if (label === 'leo') setResult($('#leoResult'), '请求失败', 'err');
+      showToast('识别请求超时', 'err');
+    })
+    .finally(() => { if (btn) btn.disabled = false; });
+}
+
+function drawLeoOverlay(leo, faces) {
+  const cv = $('#leoCanvas');
+  if (!cv) return;
+  const ctx = cv.getContext('2d');
+  const w = cv.width, h = cv.height;
+  ctx.fillStyle = '#0b0f14';
+  ctx.fillRect(0, 0, w, h);
+  if (!faces.length) {
+    cv.style.display = 'none';
+    return;
+  }
+  cv.style.display = 'block';
+  const fw = 2448, fh = 2048;
+  faces.forEach((f) => {
+    const bb = f.bbox || [];
+    if (bb.length < 4) return;
+    const x = bb[0] / fw * w, y = bb[1] / fh * h;
+    const bw = (bb[2] - bb[0]) / fw * w, bh = (bb[3] - bb[1]) / fh * h;
+    ctx.strokeStyle = f.matched ? '#10B981' : '#F59E0B';
+    ctx.lineWidth = 2;
+    ctx.strokeRect(x, y, bw, bh);
+    const label = (f.identity || 'FACE') + (f.similarity != null ? ` ${(f.similarity * 100).toFixed(0)}%` : '');
+    ctx.fillStyle = ctx.strokeStyle;
+    ctx.font = '12px sans-serif';
+    ctx.fillText(label, x + 4, Math.max(12, y - 4));
+  });
+}
+
+function fmtTs(ts) {
+  if (!ts || ts <= 0) return '—';
+  const d = new Date(ts * 1000);
+  return d.toLocaleString();
+}
+
+function deviceMeta() {
+  return state?.devices || {};
+}
+
+function agvLinkClass(s) {
+  if (s === 'ONLINE') return 'online';
+  if (s === 'WARNING') return 'warning';
+  return 'offline';
+}
+
+function worldBounds(stations, agv, map) {
+  const xs = [], ys = [];
+  Object.values(stations || {}).forEach(s => { xs.push(s.x); ys.push(s.y); });
+  if (agv) { xs.push(agv.x); ys.push(agv.y); }
+  (state?.obstacles || []).forEach(o => { xs.push(o.x); ys.push(o.y); });
+  const hdr = map?.header || {};
+  if (hdr.minPos && hdr.maxPos) {
+    xs.push(hdr.minPos.x, hdr.maxPos.x);
+    ys.push(hdr.minPos.y, hdr.maxPos.y);
+  } else {
+    (map?.cloud || []).slice(0, 400).forEach(p => { xs.push(p.x); ys.push(p.y); });
+  }
+  if (!xs.length) return { minX: -8, maxX: 8, minY: -5, maxY: 5 };
+  const pad = 0.8;
+  return {
+    minX: Math.min(...xs) - pad, maxX: Math.max(...xs) + pad,
+    minY: Math.min(...ys) - pad, maxY: Math.max(...ys) + pad
+  };
+}
+
+function worldToScreen(x, y, w, h) {
+  const spanX = (view.maxX - view.minX) || 1;
+  const spanY = (view.maxY - view.minY) || 1;
+  const sx = ((x - view.minX) / spanX) * w;
+  const sy = ((view.maxY - y) / spanY) * h;
+  return [sx, sy];
+}
+
+function screenToWorld(sx, sy, w, h) {
+  const spanX = (view.maxX - view.minX) || 1;
+  const spanY = (view.maxY - view.minY) || 1;
+  return {
+    x: view.minX + (sx / w) * spanX,
+    y: view.maxY - (sy / h) * spanY
+  };
+}
+
+function updateViewBounds() {
+  if (!state) return;
+  const b = worldBounds(state.stations, state.agv, state.map);
+  const cx = followAGV && state.agv ? state.agv.x : (view.cx || (b.minX + b.maxX) / 2);
+  const cy = followAGV && state.agv ? state.agv.y : (view.cy || (b.minY + b.maxY) / 2);
+  if (!mapReady) {
+    view.cx = (b.minX + b.maxX) / 2;
+    view.cy = (b.minY + b.maxY) / 2;
+    view.scale = 1.0;
+    mapReady = true;
+  }
+  view.cx = cx; view.cy = cy;
+  const baseW = (b.maxX - b.minX) || 2;
+  const baseH = (b.maxY - b.minY) || 2;
+  const aspect = ($('#map').clientWidth || 1) / ($('#map').clientHeight || 1);
+  let w = baseW / view.scale;
+  let h = baseH / view.scale;
+  if (w / h > aspect) h = w / aspect;
+  else w = h * aspect;
+  view.minX = cx - w / 2;
+  view.maxX = cx + w / 2;
+  view.minY = cy - h / 2;
+  view.maxY = cy + h / 2;
+}
+
+function drawMap() {
+  const c = $('#map');
+  if (!c || !state) return;
+  updateViewBounds();
+  const dpr = devicePixelRatio || 1;
+  const w = c.clientWidth, h = c.clientHeight;
+  c.width = Math.floor(w * dpr);
+  c.height = Math.floor(h * dpr);
+  const ctx = c.getContext('2d');
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.fillStyle = '#F7F8FA';
+  ctx.fillRect(0, 0, w, h);
+
+  const map = state.map || {};
+  const cloud = map.cloud || [];
+  if (mapLayers.map && cloud.length) {
+    ctx.fillStyle = 'rgba(55,65,81,0.55)';
+    const step = Math.max(1, Math.floor(cloud.length / 3500));
+    for (let i = 0; i < cloud.length; i += step) {
+      const [sx, sy] = worldToScreen(cloud[i].x, cloud[i].y, w, h);
+      ctx.fillRect(sx, sy, 1.4, 1.4);
+    }
+  }
+
+  if (mapLayers.map) {
+    for (const cu of (map.curves || [])) {
+    const pts = cu.points || [];
+    if (pts.length < 2) continue;
+    ctx.strokeStyle = 'rgba(229,54,74,0.35)';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    pts.forEach((p, i) => {
+      const [sx, sy] = worldToScreen(p.x, p.y, w, h);
+      i ? ctx.lineTo(sx, sy) : ctx.moveTo(sx, sy);
+    });
+    ctx.stroke();
+    }
+  }
+
+  const route = routeDraft.length ? routeDraft : ((state.route || {}).stations || []);
+  if (route.length > 1) {
+    ctx.strokeStyle = 'rgba(229,54,74,0.85)';
+    ctx.lineWidth = 2.5;
+    ctx.setLineDash([8, 5]);
+    ctx.beginPath();
+    route.forEach((n, i) => {
+      const s = (state.stations || {})[n];
+      if (!s) return;
+      const [sx, sy] = worldToScreen(s.x, s.y, w, h);
+      i ? ctx.lineTo(sx, sy) : ctx.moveTo(sx, sy);
+    });
+    ctx.stroke();
+    ctx.setLineDash([]);
+  }
+
+  const laser = state.laser || {};
+  const lpts = laser.points || [];
+  if (mapLayers.lidar && lpts.length) {
+    const a = mapLayers.lidarAlpha;
+    ctx.fillStyle = laser.live_lidar ? `rgba(59,130,246,${a})` : `rgba(107,114,128,${a * 0.7})`;
+    for (const p of lpts) {
+      const [sx, sy] = worldToScreen(p.x, p.y, w, h);
+      ctx.fillRect(sx - 1, sy - 1, 2, 2);
+    }
+  }
+
+  // 障碍物（仿真）
+  const obstacles = state.obstacles || [];
+  if (obstacles.length) {
+    for (const o of obstacles) {
+      const [sx, sy] = worldToScreen(o.x, o.y, w, h);
+      const [sx2] = worldToScreen(o.x + (o.r || 0.2), o.y, w, h);
+      const rr = Math.max(3, Math.abs(sx2 - sx));
+      ctx.beginPath();
+      ctx.arc(sx, sy, rr, 0, Math.PI * 2);
+      ctx.fillStyle = o.kind === 'wall' ? 'rgba(55,65,81,0.35)' : 'rgba(180,80,40,0.45)';
+      ctx.fill();
+      ctx.strokeStyle = 'rgba(40,30,20,0.35)';
+      ctx.stroke();
+    }
+  }
+
+  // 规划路径
+  const navPath = (state.nav && state.nav.path) || [];
+  if (navPath.length > 1) {
+    ctx.strokeStyle = 'rgba(16,185,129,0.9)';
+    ctx.lineWidth = 2.5;
+    ctx.setLineDash([6, 4]);
+    ctx.beginPath();
+    navPath.forEach((p, i) => {
+      const [sx, sy] = worldToScreen(p.x, p.y, w, h);
+      i ? ctx.lineTo(sx, sy) : ctx.moveTo(sx, sy);
+    });
+    ctx.stroke();
+    ctx.setLineDash([]);
+  }
+  if (state.nav && state.nav.goal) {
+    const g = state.nav.goal;
+    const [gx, gy] = worldToScreen(g.x, g.y, w, h);
+    ctx.beginPath();
+    ctx.arc(gx, gy, 10, 0, Math.PI * 2);
+    ctx.strokeStyle = '#E5364A';
+    ctx.lineWidth = 2;
+    ctx.stroke();
+    ctx.fillStyle = 'rgba(229,54,74,0.15)';
+    ctx.fill();
+  }
+
+  const rt = state.route_task || {};
+  const currentSt = rt.current || (state.agv || {}).target_id || '';
+  Object.entries(state.stations || {}).forEach(([n, s]) => {
+    const [sx, sy] = worldToScreen(s.x, s.y, w, h);
+    const isTarget = n === currentSt || n === selectedNavStation;
+    ctx.beginPath();
+    ctx.arc(sx, sy, isTarget ? 9 : 6, 0, Math.PI * 2);
+    ctx.fillStyle = isTarget ? '#E5364A' : '#10B981';
+    ctx.fill();
+    ctx.fillStyle = '#111111';
+    ctx.font = '11px Inter, Segoe UI, sans-serif';
+    ctx.fillText(n, sx + 10, sy - 6);
+  });
+
+  if (state.agv) {
+    const a = state.agv;
+    const [sx, sy] = worldToScreen(a.x, a.y, w, h);
+    ctx.save();
+    ctx.translate(sx, sy);
+    ctx.rotate(-a.angle);
+    ctx.fillStyle = '#E5364A';
+    ctx.beginPath();
+    ctx.moveTo(14, 0);
+    ctx.lineTo(-10, 9);
+    ctx.lineTo(-10, -9);
+    ctx.closePath();
+    ctx.fill();
+    ctx.restore();
+  }
+
+  if (tempStation) {
+    const [sx, sy] = worldToScreen(tempStation.x, tempStation.y, w, h);
+    ctx.beginPath();
+    ctx.arc(sx, sy, 8, 0, Math.PI * 2);
+    ctx.strokeStyle = '#E5364A';
+    ctx.lineWidth = 2;
+    ctx.stroke();
+    ctx.fillStyle = 'rgba(229,54,74,0.2)';
+    ctx.fill();
+  }
+}
+
+function stationTypeLabel(t) {
+  const s = String(t || 'LocationMark');
+  if (/charge/i.test(s)) return '充电站';
+  if (/action|work/i.test(s)) return '动作站点';
+  return '普通站点';
+}
+
+function fillStationSelects() {
+  const names = Object.keys(state?.stations || {}).sort();
+  const mk = (sel, incEmpty) => {
+    if (!sel) return;
+    const cur = selectedNavStation || sel.value;
+    sel.innerHTML = (incEmpty ? '<option value="">选择站点</option>' : '') +
+      names.map(n => `<option value="${n}">${n}</option>`).join('');
+    if (selectedNavStation && names.includes(selectedNavStation)) sel.value = selectedNavStation;
+    else if (cur && names.includes(cur)) sel.value = cur;
+  };
+  document.querySelectorAll('#navStation, .js-navStation').forEach(el => mk(el, false));
+  const curSt = String(state?.agv?.current_station || '');
+  document.querySelectorAll('#newStLink').forEach(sel => {
+    sel.innerHTML = '<option value="">（不连线 — 无法导航）</option>' +
+      names.map(n => `<option value="${n}">${n}</option>`).join('');
+    if (curSt && names.includes(curSt)) sel.value = curSt;
+    else if (selectedNavStation && names.includes(selectedNavStation)) sel.value = selectedNavStation;
+  });
+  renderRouteChecks();
+  renderStationPanel();
+}
+
+function renderRouteChecks() {
+  const names = Object.keys(state?.stations || {}).sort();
+  const html = names.map(n => {
+    const on = routeDraft.includes(n);
+    return `<label class="route-ck"><input type="checkbox" class="route-ck-in" data-st="${n}" ${on ? 'checked' : ''}/> ${n}</label>`;
+  }).join('') || '<span class="st-meta">无站点</span>';
+  document.querySelectorAll('#routeChecks, .js-routeChecks').forEach(el => { el.innerHTML = html; });
+  renderRouteChips();
+}
+
+function renderStationPanel() {
+  const stations = state?.stations || {};
+  const names = Object.keys(stations).sort();
+  const html = names.length ? names.map(n => {
+    const s = stations[n] || {};
+    const yaw = Number(s.yaw ?? s.angle ?? 0);
+    const deg = (yaw * 180 / Math.PI).toFixed(1);
+    const active = n === selectedNavStation ? ' active' : '';
+    return `<div class="st-row${active}" data-st="${n}">
+      <div>
+        <div class="st-name" data-st="${n}" title="单击选中，双击改名">${n}</div>
+        <div class="st-meta">${Number(s.x).toFixed(3)}, ${Number(s.y).toFixed(3)} · ${deg}° · ${stationTypeLabel(s.type)}</div>
+      </div>
+      <div class="st-actions">
+        <button class="btn btn-sm" data-st-go="${n}">去</button>
+        <button class="btn btn-sm" data-st-link="${n}">连线</button>
+        <button class="btn btn-sm" data-st-del="${n}">删</button>
+      </div>
+    </div>`;
+  }).join('') : '<div class="st-meta">无站点</div>';
+  document.querySelectorAll('#stationList, .js-stationList').forEach(el => { el.innerHTML = html; });
+}
+
+function renderRouteChips() {
+  const boxes = document.querySelectorAll('#routeChips, .js-routeChips');
+  const html = routeDraft.map((n, i) =>
+    `<span class="chip">${i + 1}. ${n}
+      <span class="ord" data-route-up="${i}" title="上移">↑</span>
+      <span class="ord" data-route-dn="${i}" title="下移">↓</span>
+      <span class="rm" data-i="${i}">×</span></span>`
+  ).join('');
+  boxes.forEach(box => { box.innerHTML = html; });
+}
+
+function renderRouteStatus() {
+  const rt = state?.route_task || {};
+  const el = $('#routeStatus');
+  if (!rt.running && rt.success === true) {
+    const done = (rt.completed || []).map(s => `${s} ✓`).join(' · ');
+    el.innerHTML = `<span class="done">Route Complete</span><br/>${done}`;
+    return;
+  }
+  if (rt.running) {
+    el.innerHTML = `<b>Route Running</b><br/>
+      Current: <b>${rt.current || '—'}</b><br/>
+      Next: ${rt.next || '—'}<br/>
+      Queue: ${(rt.queue || []).join(' → ') || '—'}<br/>
+      Done: ${(rt.completed || []).map(s => `${s} ✓`).join(' · ') || '—'}`;
+    return;
+  }
+  if (rt.success === false) {
+    el.innerHTML = `<span style="color:var(--bad)">Route Failed: ${rt.message || '—'}</span>`;
+    return;
+  }
+  el.textContent = routeDraft.length ? `当前路线: ${routeDraft.join(' → ')}` : '路线未启动';
+}
+
+function renderConnectionStatus() {
+  const env = state?.env || {};
+  const connected = env.adapter_connected === true;
+  const link = state?.agv_link?.status || 'OFFLINE';
+  const host = env.agv_host || env.robokit_host || '—';
+  let adp = connected ? `RBK ${host}` : 'RBK 离线';
+  if (env.control_locked) adp += ' · 已抢权';
+  else if (connected) adp += ' · 未抢权';
+  const lockEl = $('#ctlLock');
+  if (lockEl && document.activeElement !== lockEl) lockEl.checked = env.control_wanted !== false;
+  $('#adapterStatus').innerHTML = `<span style="color:var(--${connected || link === 'ONLINE' ? 'ok' : 'bad'})">${adp}</span>`;
+  $('#demoAgvInfo').textContent = connected ? '' : `目标 ${host}`;
+}
+
+function renderHeader() {
+  const env = state?.env || {};
+  const link = state?.agv_link || {};
+  const connected = env.adapter_connected === true;
+  let st = link.status || 'OFFLINE';
+  if (connected && st === 'OFFLINE') st = 'ONLINE';
+  $('#agvDot').className = 'status-dot ' + agvLinkClass(st);
+  $('#agvStatus').textContent = st;
+  renderConnectionStatus();
+  const a = state?.agv || {};
+  const m = state?.meta || {};
+  $('#hdrMeta').textContent = `${m.map_name || '—'} · ${m.vehicle_model || 'AMB-150'}`;
+  const bat = (a.battery != null) ? a.battery : (a.battery_level != null ? Math.round(Number(a.battery_level) * 100) : null);
+  const charge = a.charging ? '充电中' : '未充电';
+  const estop = (a.emergency || a.soft_emc) ? '急停' : '急停解除';
+  const blocked = a.blocked ? ' · 阻挡' : '';
+  const veh = $('#hdrVehicle');
+  if (veh) {
+    veh.textContent = `电量 ${bat != null ? bat + '%' : '—'} · ${charge} · ${estop}${blocked}`;
+    veh.style.color = (a.emergency || a.soft_emc) ? 'var(--bad)' : (a.charging ? 'var(--ok)' : '');
+  }
+  if (a && a.x != null) {
+    $('#hdrPose').textContent = `X: ${Number(a.x).toFixed(3)}  Y: ${Number(a.y).toFixed(3)}  Yaw: ${(Number(a.angle || 0) * 180 / Math.PI).toFixed(1)}°`;
+  } else {
+    $('#hdrPose').textContent = 'X: —  Y: —  Yaw: —';
+  }
+  const laser = state?.laser || {};
+  $('#mapOverlay').textContent = `${m.map_name || 'MAP'} · ${laser.label || 'NO LIVE LIDAR'} · ${laser.points?.length || 0} pts`;
+  renderChronicle();
+}
+
+function renderChronicle() {
+  const b = state?.banner || (state?.chronicle && state.chronicle[0]) || null;
+  const el = $('#chronicleBanner');
+  if (!el) return;
+  const classical = (b && (b.classical || b.title)) || '车止于途，静观四野';
+  const reason = (b && (b.reason || b.detail)) || '待命 · 点击地图设点即可导航';
+  const level = (b && b.level) || 'info';
+  const c = $('#chronicleClassical');
+  const r = $('#chronicleReason');
+  if (c) c.textContent = classical;
+  if (r) r.textContent = reason;
+  el.dataset.level = level;
+}
+
+async function navigateToXY(x, y) {
+  try {
+    const j = await (await fetch('/api/goal', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ x, y }),
+    })).json();
+    if (j.success) {
+      showToast(`目标已设 (${x.toFixed(2)}, ${y.toFixed(2)})`, 'ok');
+      if (typeof window.appendGlobalLog === 'function') {
+        window.appendGlobalLog('info', `设点导航 → (${x.toFixed(2)}, ${y.toFixed(2)})`);
+      }
+      pollState();
+    } else {
+      showToast(j.message || j.api?.err_msg || '设点失败', 'err');
+    }
+  } catch (e) {
+    showToast('设点请求失败', 'err');
+  }
+}
+
+function renderVision() {
+  const v = state?.vision || {};
+  const dev = deviceMeta();
+  const fq = v.floor_qr_scanner || {};
+  const loc = v.floor_qr_localization || {};
+  const wc = v.wrist_camera || {};
+  const leo = v.leo_face || {};
+  const dets = wc.last_detections || [];
+
+  const fqHost = dev.floor_qr_scanner?.host || fq.host || '—';
+  const fqProto = dev.floor_qr_scanner?.protocol || 'Keyence TCP';
+  $('#floorQrDevice').textContent = `${fqHost} · ${fqProto}`;
+
+  const fqSt = fq.status || 'OFFLINE';
+  const fqTcp = fq.tcp_port_open !== false;
+  const fqNet = fq.network_online === true;
+  const fqRos = fq.ros_node_online === true;
+  let fqBadge = fqSt;
+  if (fqSt === 'TCP REFUSED' || (fqNet && fq.tcp_port_open === false)) {
+    fqBadge = 'TCP REFUSED';
+  } else if (fqSt === 'OFFLINE' && fqNet) fqBadge = fqRos ? 'SCANNER READY' : 'NET OK · NO ROS';
+  $('#floorQrBadge').textContent = fqBadge;
+  $('#floorQrBadge').style.color = (fqSt === 'ONLINE' || fqSt === 'SCANNER READY') ? 'var(--ok)' : (fqNet ? 'var(--warn)' : 'var(--bad)');
+
+  const qrVal = fq.last_qr_id || '';
+  $('#floorQrId').textContent = qrVal || '—';
+  $('#floorQrTime').textContent = fmtTs(fq.last_scan_at);
+
+  const mainEl = $('#floorQrMain');
+  if (fqSt !== 'ONLINE' && fqSt !== 'SCANNER READY') {
+    mainEl.textContent = fqNet ? (fqRos ? 'WAITING FOR QR' : 'NET OK · ROS OFFLINE') : 'SCANNER OFFLINE';
+    mainEl.className = 'scanner-main wait';
+  } else if (!qrVal) {
+    mainEl.textContent = 'WAITING FOR QR';
+    mainEl.className = 'scanner-main wait';
+  } else {
+    mainEl.textContent = qrVal;
+    mainEl.className = 'scanner-main';
+  }
+
+  const rp = loc.robot_pose || {};
+  const qp = loc.qr_pose || {};
+  $('#floorQrAgvPose').textContent = rp.x != null
+    ? `${Number(rp.x).toFixed(2)} / ${Number(rp.y).toFixed(2)} / ${(Number(rp.angle || 0) * 180 / Math.PI).toFixed(1)}°`
+    : '—';
+  $('#floorQrExpPose').textContent = qp.x != null
+    ? `${Number(qp.x).toFixed(2)} / ${Number(qp.y).toFixed(2)} / ${(Number(qp.angle || 0) * 180 / Math.PI).toFixed(1)}°`
+    : '—';
+  $('#floorQrPosErr').textContent = loc.position_error != null ? `${loc.position_error} m` : '—';
+  $('#floorQrAngErr').textContent = loc.angle_error != null ? `${loc.angle_error}°` : '—';
+
+  const verdict = loc.verdict || (loc.level === 'OK' ? 'MATCH' : (loc.qr_id ? 'MISMATCH' : 'UNKNOWN'));
+  const locEl = $('#floorQrLoc');
+  locEl.textContent = verdict;
+  locEl.className = verdict === 'MATCH' ? 'loc-match' : (verdict === 'MISMATCH' ? 'loc-mismatch' : 'loc-unknown');
+
+  const wcHost = dev.wrist_camera?.host || wc.host || '—';
+  const wcProto = dev.wrist_camera?.protocol || 'Pylon ROS2';
+  const wSt = wc.status || 'OFFLINE';
+  const imgOk = wc.image_available === true || (wc.has_frame === true && wSt === 'ONLINE');
+  const rosOn = wc.ros_node_online === true;
+  const netOn = wc.network_online === true;
+  let badgeText = wSt;
+  if (wSt === 'OFFLINE') badgeText = 'OFFLINE';
+  else if (!imgOk) badgeText = 'IMAGE UNAVAILABLE';
+  else badgeText = 'ONLINE';
+  $('#wristBadge').textContent = badgeText;
+  $('#wristBadge').style.color = imgOk ? 'var(--ok)' : (wSt === 'OFFLINE' ? 'var(--bad)' : 'var(--warn)');
+  $('#wristFps').textContent = `FPS: ${(wc.fps || 0).toFixed(1)}`;
+  $('#wristRos').textContent = `Net:${netOn ? 'Y' : 'N'} ROS:${rosOn ? 'Y' : 'N'} D:${wc.ros_domain_id ?? dev.ros_domain_id ?? 30}`;
+  const showDet = imgOk && wSt !== 'OFFLINE';
+  const lastQr = showDet
+    ? (wc.last_qr || (dets.find(d => (d.detected_type || '').toUpperCase() === 'QR') || {}).detected_id || '')
+    : '';
+  const lastTag = showDet
+    ? (wc.last_apriltag || (dets.find(d => (d.detected_type || '').toUpperCase().includes('APRIL')) || {}).detected_id || '')
+    : '';
+  $('#wristDet').textContent = !showDet ? 'QR: —' : (lastQr ? `QR: ${lastQr}` : 'QR: No detection');
+  $('#wristTagDet').textContent = !showDet ? 'AprilTag: —' : (lastTag ? `AprilTag: ${lastTag}` : 'AprilTag: No detection');
+  const tp = wc.apriltag_pose || {};
+  const poseEl = $('#wristTagPose');
+  if (poseEl) {
+    if (tp.yaw_deg != null) {
+      poseEl.textContent = `R ${tp.roll_deg}° P ${tp.pitch_deg}° Y ${tp.yaw_deg}°  xyz ${tp.x},${tp.y},${tp.z}`;
+    } else {
+      poseEl.textContent = '角度: 等待 AprilTag 6D';
+    }
+  }
+  const wImg = $('#wristImg'), wPh = $('#wristPlaceholder');
+  const haveSnap = !!wristSnapUrl;
+  if (wSt === 'OFFLINE' && !rosOn && !netOn && !haveSnap) {
+    wImg.style.display = 'none';
+    wPh.style.display = 'block';
+    wPh.textContent = `CAMERA OFFLINE · ${wcHost}`;
+  } else if (!imgOk && !haveSnap) {
+    wImg.style.display = 'none';
+    wPh.style.display = 'block';
+    const age = wc.last_frame_ms_ago;
+    const ageTxt = age != null ? ` · last ${Math.round(age / 100) / 10}s` : '';
+    const dom = wc.ros_domain_id ?? dev.ros_domain_id ?? 30;
+    if (netOn && !rosOn) wPh.textContent = `NET OK · NO ROS PUBLISHER (Domain ${dom})`;
+    else if (rosOn) wPh.textContent = 'WAITING FOR IMAGE' + ageTxt;
+    else wPh.textContent = 'WAITING FOR ROS IMAGE';
+  } else if (haveSnap) {
+    wImg.style.display = 'block';
+    wPh.style.display = 'none';
+  }
+
+  const leoSt = leo.status || 'OFFLINE';
+  const leoLive = leoSt === 'ONLINE' || leo.continuous_running === true;
+  $('#leoBadge').textContent = leo.continuous_running ? 'LIVE' : leoSt;
+  $('#leoBadge').style.color = leoLive ? 'var(--ok)' : (leoSt === 'READY' ? 'var(--warn)' : 'var(--bad)');
+  const lj = dev.leo_face?.jetson_host || leo.jetson_host || '—';
+  const lc = dev.leo_face?.camera_host || leo.camera_host || '—';
+  const leoPh = $('#leoPlaceholder');
+  const named = (leo.person_name || '') && String(leo.person_name).toUpperCase() !== 'UNKNOWN';
+  const faces = leo.faces || [];
+  drawLeoOverlay(leo, faces);
+  if (leoLive && named) {
+    leoPh.innerHTML = `<b>${leo.person_name}</b><br/>${((leo.confidence || 0) * 100).toFixed(0)}% · 无视频流`;
+  } else if (leoLive && String(leo.person_name || '').toUpperCase() === 'UNKNOWN') {
+    leoPh.innerHTML = '<b>UNKNOWN</b><br/>有脸未匹配 · 无视频流';
+  } else if (leoLive && leo.raw_status === 'MULTIPLE_FACES') {
+    leoPh.innerHTML = 'MULTIPLE_FACES · 无视频流';
+  } else if (leoLive) {
+    leoPh.innerHTML = leo.raw_status === 'NO_FACE'
+      ? 'NO_FACE · 识别在跑<br/>Leo 本版不提供 MJPEG'
+      : '识别在线 · 本版无视频预览';
+  } else if (leoSt === 'READY') {
+    leoPh.innerHTML = 'face_executor READY<br/>点「连续识别开」';
+  } else {
+    leoPh.innerHTML = 'Face Recognition<br/>OFFLINE';
+  }
+  const seq = leo.last_sequence != null ? `seq ${leo.last_sequence}` : 'seq —';
+  $('#leoMeta').textContent = `${leo.message || `Jetson ${lj} / Cam ${lc}`} · ${seq}`;
+  const busy = $('#leoResult') && $('#leoResult').classList.contains('busy');
+  if (!busy && leoLive) {
+    const kind = named ? 'ok' : (leoSt === 'ONLINE' ? 'warn' : 'idle');
+    setResult($('#leoResult'), leo.message || leo.raw_status || 'ONLINE', kind);
+  }
+}
+
+function renderArm() {
+  const a = armState || state?.arm || {};
+  const online = a.online === true;
+  const motion = a.motion || 'OFFLINE';
+  const badge = $('#armBadge');
+  badge.textContent = online ? (motion === 'MOVING' ? 'MOVING' : 'ONLINE') : 'OFFLINE';
+  badge.style.color = online ? (motion === 'ERROR' ? 'var(--bad)' : 'var(--ok)') : 'var(--bad)';
+  const mode = (a.arm_mode || a.mode || 'simulation').toUpperCase();
+  const realMotion = a.real_motion_enabled === true;
+  $('#armModeMeta').innerHTML = `Mode: <b>${mode}</b> · Motion: <b>${motion}</b>`
+    + (realMotion ? ' <span style="color:var(--bad)">REAL MOTION ON</span>' : '');
+  const err = a.error || {};
+  const joints = a.joints?.positions_deg || [];
+  let jHtml = '';
+  for (let i = 0; i < 6; i++) {
+    const v = joints[i] != null ? Number(joints[i]).toFixed(1) : '—';
+    jHtml += `<div>J${i + 1}: <b>${v}°</b></div>`;
+  }
+  if (err.message) jHtml += `<div style="color:var(--bad)">Error: ${err.message}</div>`;
+  if (a.warning) jHtml += `<div style="color:var(--warn)">Warn: ${a.warning}</div>`;
+  $('#armJointList').innerHTML = jHtml;
+  const tcp = a.tcp || {};
+  $('#armTcpPose').innerHTML = `TCP: X <b>${tcp.x_mm ?? '—'}</b> Y <b>${tcp.y_mm ?? '—'}</b> Z <b>${tcp.z_mm ?? '—'}</b> mm<br/>`
+    + `Rx <b>${tcp.rx_deg ?? '—'}</b>° Ry <b>${tcp.ry_deg ?? '—'}</b>° Rz <b>${tcp.rz_deg ?? '—'}</b>°`;
+  const grip = a.gripper?.state || 'UNKNOWN';
+  $('#armGripper').innerHTML = `Gripper: <b>${grip}</b>`;
+  $('#armLastText').textContent = a.last_text || (a.stale_ms != null ? `stale ${a.stale_ms}ms` : '—');
+  if (joints.length) drawArmModel(joints);
+  if (!armControlsReady) initArmControls();
+}
+
+function drawArmModel(jointsDeg) {
+  const c = $('#armCanvas');
+  if (!c) return;
+  const ctx = c.getContext('2d');
+  const w = c.width, h = c.height;
+  ctx.fillStyle = '#080c10';
+  ctx.fillRect(0, 0, w, h);
+  const j = jointsDeg.map(v => Number(v) || 0);
+  const baseX = w * 0.18, baseY = h * 0.82;
+  const l1 = 42, l2 = 36, l3 = 28, l4 = 22;
+  const a1 = j[0] * Math.PI / 180;
+  const a2 = (-j[1] - 20) * Math.PI / 180;
+  const a3 = (-j[2] - 10) * Math.PI / 180;
+  const a4 = (-j[3]) * Math.PI / 180;
+  let x = baseX, y = baseY;
+  ctx.strokeStyle = '#3a4a58';
+  ctx.lineWidth = 3;
+  ctx.lineCap = 'round';
+  const segs = [
+    [l1, a1 + a2],
+    [l2, a1 + a2 + a3],
+    [l3, a1 + a2 + a3 + a4],
+    [l4, a1 + a2 + a3 + a4 + j[4] * Math.PI / 180],
+  ];
+  ctx.beginPath();
+  ctx.moveTo(x, y);
+  let ang = -Math.PI / 2 + a1 * 0.35;
+  segs.forEach(([len, endAng]) => {
+    ang = -Math.PI / 2 + endAng * 0.55;
+    const nx = x + len * Math.cos(ang);
+    const ny = y + len * Math.sin(ang);
+    ctx.lineTo(nx, ny);
+    x = nx; y = ny;
+  });
+    ctx.stroke();
+  ctx.fillStyle = '#58a6ff';
+  ctx.beginPath();
+  ctx.arc(baseX, baseY, 5, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.fillStyle = '#f0883e';
+  ctx.beginPath();
+  ctx.arc(x, y, 4, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.fillStyle = '#8b949e';
+  ctx.font = '10px sans-serif';
+  ctx.fillText('TCP', x + 6, y - 4);
+}
+
+function initArmControls() {
+  armControlsReady = true;
+  const box = $('#armJointControls');
+  box.innerHTML = '';
+  for (let i = 0; i < 6; i++) {
+    const row = document.createElement('div');
+    row.className = 'arm-joint-row';
+    row.innerHTML = `<label>J${i + 1}</label><button class="btn" data-j="${i}" data-d="-5">−</button>`
+      + `<input type="number" id="armJ${i}" value="0" step="0.1"/>`
+      + `<button class="btn" data-j="${i}" data-d="5">+</button>`;
+    box.appendChild(row);
+  }
+  const tcpRow = document.createElement('div');
+  tcpRow.className = 'cam-meta';
+  tcpRow.style.marginTop = '.25rem';
+  ['x', 'y', 'z'].forEach(ax => {
+    const b = document.createElement('button');
+    b.className = 'btn';
+    b.style.fontSize = '.65rem';
+    b.textContent = `TCP ${ax.toUpperCase()} +`;
+    b.onclick = () => armCmd({ kind: 'move_tcp', tcp_axis: ax, delta_mm: 5, keep_tcp_fixed: false });
+    tcpRow.appendChild(b);
+    const bm = document.createElement('button');
+    bm.className = 'btn';
+    bm.style.fontSize = '.65rem';
+    bm.textContent = `${ax.toUpperCase()} −`;
+    bm.onclick = () => armCmd({ kind: 'move_tcp', tcp_axis: ax, delta_mm: -5, keep_tcp_fixed: false });
+    tcpRow.appendChild(bm);
+  });
+  box.appendChild(tcpRow);
+  box.querySelectorAll('button[data-j]').forEach(btn => {
+    btn.onclick = () => {
+      const idx = +btn.dataset.j;
+      const delta = +btn.dataset.d;
+      const keep = $('#armKeepTcp').checked;
+      armCmd({ kind: 'move_joint', joint_index: idx, delta_deg: delta, keep_tcp_fixed: keep });
+    };
+  });
+}
+
+async function armCmd(payload) {
+  try {
+    const j = await (await fetch('/api/arm/command', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+      signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+    })).json();
+    if (j.state) { armState = j.state; renderArm(); }
+    else pollArm();
+    if (!j.success && j.message) $('#armLastText').textContent = j.message;
+  } catch (e) {
+    $('#armLastText').textContent = 'arm cmd timeout';
+  }
+}
+
+async function setArmMode(mode) {
+  try {
+    const j = await (await fetch('/api/arm/mode', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ mode }),
+      signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+    })).json();
+    if (j.success) pollArm();
+  } catch (e) { /* ignore */ }
+}
+
+async function pollArm() {
+  try {
+    armState = await fetchJson('/api/arm/status');
+    renderArm();
+  } catch (e) {
+    $('#armBadge').textContent = 'OFFLINE';
+    $('#armBadge').style.color = 'var(--bad)';
+  }
+}
+
+function renderJason() { renderVision(); }
+
+function renderMapSelect() {
+  const sel = $('#mapSel');
+  const maps = state?.map?.available || [];
+  if (!maps.length) return;
+  const cur = state?.map?.smap_file || '';
+  sel.innerHTML = maps.map(x => {
+    const file = x.file || x;
+    const label = x.name || String(file).replace('.smap', '');
+    return `<option value="${file}">${label}</option>`;
+  }).join('');
+  if (cur) sel.value = cur;
+}
+
+function render() {
+  if (!state) return;
+  renderHeader();
+  fillStationSelects();
+  renderRouteChips();
+  renderRouteStatus();
+  renderMapSelect();
+  renderVision();
+  if (state.arm) { armState = state.arm; renderArm(); }
+  drawMap();
+}
+
+async function fetchJson(url) {
+  const res = await fetch(url, { cache: 'no-store', signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) });
+  return res.json();
+}
+
+async function pollHeartbeat() {
+  try {
+    const hb = await fetchJson('/api/heartbeat');
+    if (!state) state = {};
+    if (hb.agv) state.agv = hb.agv;
+    if (hb.env) state.env = hb.env;
+    if (hb.agv_link) state.agv_link = hb.agv_link;
+    if (hb.banner) state.banner = hb.banner;
+    if (hb.laser) state.laser = { ...(state.laser || {}), ...hb.laser, points: (state.laser || {}).points || [] };
+    renderHeader();
+  } catch (e) { /* keep last header */ }
+}
+
+async function pollState() {
+  try {
+    state = await fetchJson('/api/state');
+    render();
+    if (!mapSynced) {
+      mapSynced = true;
+      fetch('/api/maps/robot', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' })
+        .then(() => pollState())
+        .catch(() => {});
+    }
+  } catch (e) {
+    if (state?.env?.adapter_connected) {
+      $('#agvStatus').textContent = 'STALE';
+      $('#agvDot').className = 'status-dot warning';
+    } else {
+      $('#agvDot').className = 'status-dot offline';
+      $('#agvStatus').textContent = 'OFFLINE';
+    }
+    if (state) renderVision();
+  }
+}
+
+async function pollJason() { /* legacy no-op — wrist status from /api/state */ }
+
+function pollWristLive() {
+  if (wristSnapBusy) return;
+  wristSnapBusy = true;
+  fetch('/api/vision/wrist_camera/snapshot?t=' + Date.now(), {
+    cache: 'no-store',
+    signal: AbortSignal.timeout(2500)
+  })
+    .then(r => {
+      if (!r.ok) throw new Error('snap ' + r.status);
+      return r.blob();
+    })
+    .then(blob => {
+      if (!blob || blob.size < 80) throw new Error('empty');
+      wristSnapMiss = 0;
+      const img = $('#wristImg');
+      const ph = $('#wristPlaceholder');
+      const nextUrl = URL.createObjectURL(blob);
+      const prev = wristSnapUrl;
+      img.onload = () => {
+        if (prev && prev !== nextUrl) URL.revokeObjectURL(prev);
+      };
+      wristSnapUrl = nextUrl;
+      img.src = nextUrl;
+      img.style.display = 'block';
+      if (ph) ph.style.display = 'none';
+    })
+    .catch(() => {
+      wristSnapMiss += 1;
+      if (wristSnapMiss < 16) return;
+      const img = $('#wristImg');
+      const ph = $('#wristPlaceholder');
+      if (wristSnapUrl) {
+        URL.revokeObjectURL(wristSnapUrl);
+        wristSnapUrl = '';
+      }
+      if (img) {
+        img.removeAttribute('src');
+        img.style.display = 'none';
+      }
+      if (ph) {
+        ph.style.display = 'block';
+        ph.textContent = 'NO LIVE FRAME · 画面已停更';
+      }
+    })
+    .finally(() => { wristSnapBusy = false; });
+}
+
+function pollJasonSnapshot() { pollWristLive(); }
+
+$('#btnArmStop').onclick = () => armCmd({ kind: 'stop' });
+
+async function pollRoute() {
+  try {
+    const j = await (await fetch('/api/route/status')).json();
+    if (j.route_task) state = state || {};
+    if (state) {
+      state.route_task = j.route_task;
+      state.route = j.route;
+      renderRouteStatus();
+      drawMap();
+    }
+  } catch (e) { /* ignore */ }
+}
+
+$('#btnFollow').onclick = () => {
+  followAGV = !followAGV;
+  $('#btnFollow').classList.toggle('active', followAGV);
+};
+$('#btnZoomIn').onclick = () => { view.scale = Math.min(view.scale * 1.25, 8); drawMap(); };
+$('#btnZoomOut').onclick = () => { view.scale = Math.max(view.scale / 1.25, 0.3); drawMap(); };
+
+const mapEl = $('#map');
+mapEl.addEventListener('mousedown', e => {
+  followAGV = false;
+  $('#btnFollow').classList.remove('active');
+  mapDragMoved = false;
+  drag = { x: e.clientX, y: e.clientY, minX: view.minX, maxX: view.maxX, minY: view.minY, maxY: view.maxY };
+  mapEl.classList.add('dragging');
+});
+window.addEventListener('mousemove', e => {
+  if (!drag) return;
+  if (Math.abs(e.clientX - drag.x) > 3 || Math.abs(e.clientY - drag.y) > 3) mapDragMoved = true;
+  const w = mapEl.clientWidth, h = mapEl.clientHeight;
+  const dx = (e.clientX - drag.x) / w * (drag.maxX - drag.minX);
+  const dy = (e.clientY - drag.y) / h * (drag.maxY - drag.minY);
+  view.minX = drag.minX - dx; view.maxX = drag.maxX - dx;
+  view.minY = drag.minY + dy; view.maxY = drag.maxY + dy;
+  view.cx = (view.minX + view.maxX) / 2;
+  view.cy = (view.minY + view.maxY) / 2;
+  drawMap();
+});
+window.addEventListener('mouseup', e => {
+  if (drag && !mapDragMoved && state) {
+    const rect = mapEl.getBoundingClientRect();
+    const sx = e.clientX - rect.left, sy = e.clientY - rect.top;
+    const w = mapEl.clientWidth, h = mapEl.clientHeight;
+    const wp = screenToWorld(sx, sy, w, h);
+    let hitStation = null, hitDist = 18;
+    Object.entries(state.stations || {}).forEach(([n, s]) => {
+      const [px, py] = worldToScreen(s.x, s.y, w, h);
+      const d = Math.hypot(px - sx, py - sy);
+      if (d < hitDist) { hitDist = d; hitStation = n; }
+    });
+    const simMode = (state.env && (state.env.mode === 'sim_api' || state.env.backend === 'robokit_mock_3055'));
+    if (hitStation && !simMode) {
+      selectedNavStation = hitStation;
+      toast(`选中站点 ${hitStation}`, 'info');
+    } else if (simMode || !hitStation) {
+      // 仿真：单击地图 = 设导航目标（走实车同款 API）
+      navigateToXY(wp.x, wp.y);
+      tempStation = { x: wp.x, y: wp.y };
+      drawMap();
+    } else {
+      tempStation = { x: wp.x, y: wp.y };
+      $('#newStX').value = wp.x.toFixed(3);
+      $('#newStY').value = wp.y.toFixed(3);
+      $('#newStName').value = '';
+      $('#stationModal').classList.add('show');
+      drawMap();
+    }
+  }
+  drag = null;
+  mapEl.classList.remove('dragging');
+});
+mapEl.addEventListener('dblclick', e => {
+  if (!state) return;
+  const rect = mapEl.getBoundingClientRect();
+  const sx = e.clientX - rect.left, sy = e.clientY - rect.top;
+  const w = mapEl.clientWidth, h = mapEl.clientHeight;
+  let hitStation = null, hitDist = 18;
+  Object.entries(state.stations || {}).forEach(([n, s]) => {
+    const [px, py] = worldToScreen(s.x, s.y, w, h);
+    const d = Math.hypot(px - sx, py - sy);
+    if (d < hitDist) { hitDist = d; hitStation = n; }
+  });
+  if (hitStation) {
+    $('#renameOld').value = hitStation;
+    $('#renameNew').value = hitStation;
+    $('#renameModal').classList.add('show');
+  }
+});
+mapEl.addEventListener('wheel', e => {
+  e.preventDefault();
+  view.scale *= e.deltaY < 0 ? 1.15 : 1 / 1.15;
+  view.scale = Math.max(0.3, Math.min(8, view.scale));
+  drawMap();
+}, { passive: false });
+
+$('#btnRefreshMap').onclick = async () => {
+  const name = $('#mapSel').value;
+  if (name) {
+    await fetch('/api/maps/switch', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ map_name: name.replace('.smap','') }) });
+  } else {
+    await fetch('/api/maps/refresh', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+  }
+  mapReady = false;
+  await pollState();
+};
+
+async function navigateTo(target) {
+  target = String(target || selectedNavStation || $('#navStation')?.value || '').trim();
+  const st = (state?.stations || {})[target];
+  console.log('[station] navigate', { id: target, station: st });
+  if (!target) {
+    showToast('请先选择站点', 'warn');
+    return;
+  }
+  selectedNavStation = target;
+  showToast(`导航至 ${target}…`, 'info', 2500);
+  try {
+    const j = await (await fetch('/api/navigate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ target_id: target, wait: false, skip_reloc: true }),
+      signal: AbortSignal.timeout(20000),
+    })).json();
+    showToast(j.message || (j.success ? `已发送导航: ${target}` : '导航失败'), j.success ? 'ok' : 'err', 6000);
+  } catch (e) {
+    showToast('导航请求失败或超时', 'err');
+  }
+}
+
+$('#btnNavGo') && ($('#btnNavGo').onclick = () => navigateTo());
+
+$('#btnCancel').onclick = () => fetch('/api/cancel', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+
+$('#btnRouteClear').onclick = () => { routeDraft = []; renderRouteChecks(); drawMap(); };
+
+$('#btnRouteStart').onclick = async () => {
+  if (!routeDraft.length) return;
+  $('#btnRouteStart').disabled = true;
+  try {
+    const j = await (await fetch('/api/route', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ stations: routeDraft, run: true, async: true, wait: true })
+    })).json();
+    if (j.success) {
+      $('#routeStatus').innerHTML = '<b>Route Started</b>';
+    } else {
+      $('#routeStatus').textContent = j.message || '启动失败';
+    }
+  } finally { $('#btnRouteStart').disabled = false; }
+};
+
+$('#btnQrStart').onclick = () => fetch('/api/vision/wrist_camera/detect/start', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' }).then(pollState);
+$('#btnQrStop').onclick = () => fetch('/api/vision/wrist_camera/detect/stop', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' }).then(pollState);
+$('#btnLeoStart').onclick = () => {
+  showToast('正在启动 Leo 连续识别…', 'info', 4000);
+  fetch('/api/vision/leo_face/continuous/start', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}',
+    signal: AbortSignal.timeout(20000),
+  }).then(r => r.json()).then(j => {
+    const ok = j.success === true || j.status === 'RUNNING' || j.status === 'ALREADY_RUNNING';
+    showToast(j.status || j.message || 'SetBool data:true', ok ? 'ok' : 'err', 6000);
+    pollState();
+  }).catch(() => showToast('Leo 连续识别启动超时', 'err'));
+};
+$('#btnLeoStop').onclick = () => fetch('/api/vision/leo_face/continuous/stop', {
+  method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}',
+  signal: AbortSignal.timeout(15000),
+}).then(r => r.json()).then(j => { showToast(j.status || j.message || 'SetBool data:false', j.success ? 'ok' : 'warn'); pollState(); })
+  .catch(() => showToast('Leo 停止超时', 'err'));
+
+$('#btnAddStation').onclick = () => {
+  if (state?.agv) {
+    $('#newStX').value = state.agv.x.toFixed(3);
+    $('#newStY').value = state.agv.y.toFixed(3);
+  }
+  fillStationSelects();
+  $('#stationModal').classList.add('show');
+};
+$('#btnCancelStation').onclick = () => {
+  tempStation = null;
+  $('#stationModal').classList.remove('show');
+  drawMap();
+};
+if ($('#btnSaveStation')) $('#btnSaveStation').onclick = async () => {
+  const name = ($('#newStName')?.value || '').trim();
+  if (!name) {
+    showToast('请输入站点名称（仅字母数字）', 'warn');
+    return;
+  }
+  showToast(`正在保存 ${name}…`, 'info', 2000);
+  try {
+    const j = await (await fetch('/api/stations/add', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        station_id: name,
+        x: +($('#newStX')?.value || 0),
+        y: +($('#newStY')?.value || 0),
+        connect_from: ($('#newStLink')?.value || ''),
+      }),
+      signal: AbortSignal.timeout(90000),
+    })).json();
+    if (j.success) {
+      selectedNavStation = name;
+      tempStation = null;
+      $('#stationModal')?.classList.remove('show');
+      if ($('#newStName')) $('#newStName').value = '';
+      showToast(j.message || `站点 ${name} 已保存`, j.persisted_robot ? 'ok' : 'warn', 8000);
+      await pollState();
+    } else {
+      showToast(j.message || '保存失败', 'err', 6000);
+    }
+  } catch (e) {
+    showToast('保存请求失败或超时', 'err');
+  }
+};
+
+$('#btnCancelRename').onclick = () => $('#renameModal').classList.remove('show');
+$('#btnSaveRename').onclick = async () => {
+  const oldId = $('#renameOld').value.trim();
+  const newId = $('#renameNew').value.trim();
+  if (!oldId || !newId || oldId === newId) return;
+  const j = await (await fetch('/api/stations/rename', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ old_id: oldId, new_id: newId })
+  })).json();
+  if (j.success) {
+    selectedNavStation = newId;
+    $('#renameModal').classList.remove('show');
+    await pollState();
+  } else {
+    alert(j.message || '重命名失败');
+  }
+};
+
+document.addEventListener('click', e => {
+  const modal = $('#stationModal');
+  if (modal.classList.contains('show') && e.target === modal) {
+    tempStation = null;
+    modal.classList.remove('show');
+    drawMap();
+  }
+});
+
+window.addEventListener('resize', drawMap);
+
+document.getElementById('ctlLock')?.addEventListener('change', async (e) => {
+  const on = !!e.target.checked;
+  try {
+    const j = await (await fetch('/api/agv/lock', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ locked: on }),
+      signal: AbortSignal.timeout(8000),
+    })).json();
+    showToast(j.message || (on ? '已抢控制权' : '已释放控制权'), j.success ? 'ok' : 'err', 5000);
+    pollHeartbeat();
+  } catch (err) {
+    showToast('控制权请求失败', 'err');
+  }
+});
+
+setInterval(pollHeartbeat, HEARTBEAT_MS);
+setInterval(pollState, STATE_POLL_MS);
+setInterval(pollWristLive, 400);
+setInterval(pollRoute, 2000);
+bindVisionActions();
+pollHeartbeat();
+pollState();
+pollWristLive();
+
+function bindMapLayers() {
+  const m = document.getElementById('layerMap');
+  const l = document.getElementById('layerLidar');
+  const a = document.getElementById('layerLidarAlpha');
+  if (m) m.onchange = () => { mapLayers.map = m.checked; drawMap(); };
+  if (l) l.onchange = () => {
+    mapLayers.lidar = l.checked;
+    const w = document.getElementById('wShowCloud');
+    if (w) w.checked = mapLayers.lidar;
+    drawMap();
+  };
+  if (a) a.oninput = () => { mapLayers.lidarAlpha = Number(a.value) / 100; drawMap(); };
+}
+bindMapLayers();
+
+async function deleteStation(id) {
+  if (!id || !confirm(`删除站点 ${id}？将从本地 smap 删除，并尝试上传到机器人。`)) return;
+  const j = await (await fetch('/api/stations/delete', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ station_id: id }),
+  })).json();
+  if (j.success) {
+    if (selectedNavStation === id) selectedNavStation = '';
+    showToast(j.persisted_robot ? `已删除 ${id}` : (`本地已删 ${id}` + (j.message ? ` (${j.message})` : '')), j.persisted_robot ? 'ok' : 'warn', 6000);
+    await pollState();
+  } else {
+    alert(j.message || '删除失败');
+  }
+}
+
+document.addEventListener('change', (e) => {
+  const t = e.target;
+  if (t && t.classList.contains('route-ck-in')) {
+    const n = t.getAttribute('data-st');
+    if (!n) return;
+    if (t.checked) {
+      if (!routeDraft.includes(n)) routeDraft.push(n);
+    } else {
+      routeDraft = routeDraft.filter(x => x !== n);
+    }
+    renderRouteChecks();
+    drawMap();
+    return;
+  }
+  if (!t || !(t.id === 'navStation' || t.classList.contains('js-navStation'))) return;
+  selectedNavStation = t.value;
+  console.log('[station] select', selectedNavStation, (state?.stations || {})[selectedNavStation]);
+  document.querySelectorAll('#navStation, .js-navStation').forEach((el) => { el.value = selectedNavStation; });
+  renderStationPanel();
+  drawMap();
+});
+document.addEventListener('click', (e) => {
+  const up = e.target.closest('[data-route-up]');
+  if (up) {
+    const i = +up.getAttribute('data-route-up');
+    if (i > 0) { const t = routeDraft[i - 1]; routeDraft[i - 1] = routeDraft[i]; routeDraft[i] = t; }
+    renderRouteChecks(); drawMap();
+    return;
+  }
+  const dn = e.target.closest('[data-route-dn]');
+  if (dn) {
+    const i = +dn.getAttribute('data-route-dn');
+    if (i < routeDraft.length - 1) { const t = routeDraft[i + 1]; routeDraft[i + 1] = routeDraft[i]; routeDraft[i] = t; }
+    renderRouteChecks(); drawMap();
+    return;
+  }
+  const rm = e.target.closest('.chip .rm');
+  if (rm && rm.dataset.i != null) {
+    routeDraft.splice(+rm.dataset.i, 1);
+    renderRouteChecks(); drawMap();
+    return;
+  }
+  const go = e.target.closest('[data-st-go]');
+  if (go) {
+    selectedNavStation = go.getAttribute('data-st-go');
+    navigateTo(selectedNavStation);
+    return;
+  }
+  const link = e.target.closest('[data-st-link]');
+  if (link) {
+    const to = link.getAttribute('data-st-link');
+    const from = String(state?.agv?.current_station || selectedNavStation || '').trim();
+    if (!from || from === to) {
+      showToast('请先选中或停在要连接的另一站点（当前站）', 'warn');
+      return;
+    }
+    fetch('/api/stations/connect', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ from_id: from, to_id: to }),
+      signal: AbortSignal.timeout(90000),
+    }).then(r => r.json()).then(j => {
+      showToast(j.message || `连线 ${from}↔${to}`, j.success ? (j.persisted_robot ? 'ok' : 'warn') : 'err', 8000);
+      pollState();
+    }).catch(() => showToast('连线超时', 'err'));
+    return;
+  }
+  const del = e.target.closest('[data-st-del]');
+  if (del) {
+    deleteStation(del.getAttribute('data-st-del'));
+    return;
+  }
+  const name = e.target.closest('.st-name');
+  if (name) {
+    selectedNavStation = name.getAttribute('data-st');
+    console.log('[station] panel select', selectedNavStation, (state?.stations || {})[selectedNavStation]);
+    fillStationSelects();
+    drawMap();
+  }
+});
+document.addEventListener('dblclick', (e) => {
+  const name = e.target.closest('.st-name');
+  if (!name) return;
+  const id = name.getAttribute('data-st');
+  $('#renameOld').value = id;
+  $('#renameNew').value = id;
+  $('#renameModal').classList.add('show');
+});
+document.addEventListener('DOMContentLoaded', () => { if (document.readyState === 'complete') drawMap(); });
+
+// ── Widget system ──
+let widgetMgr = null;
+
+function initAgvStatusWidget(card) {
+  const body = card.querySelector('.widget-body');
+  body.innerHTML = '<div id="agvWidgetBody">加载中…</div>';
+  const tick = () => {
+    const el = document.getElementById('agvWidgetBody');
+    if (!el || !state) return;
+    const agv = state.agv || {};
+    const env = state.env || {};
+    const rt = state.route_task || {};
+    const batN = (agv.battery != null) ? agv.battery : (agv.battery_level != null ? Math.round(Number(agv.battery_level) * 100) : null);
+    const batTxt = batN != null ? (batN + '%') : '—';
+    const ts = Number(agv.task_status || 0);
+    const taskMap = {0:'空闲',2:'导航中',4:'到达',5:'失败',6:'取消'};
+    const taskLabel = rt.running ? '路线中' : (taskMap[ts] || ('状态'+ts));
+    el.innerHTML = `
+      <div class="agv-w-row"><span>模式</span><b>${(env.mode || '—').toUpperCase()}</b></div>
+      <div class="agv-w-row"><span>地图</span><b>${state.map?.smap_file || '—'}</b></div>
+      <div class="agv-w-row"><span>位置</span><b>x=${(agv.x ?? '—')} y=${(agv.y ?? '—')}</b></div>
+      <div class="agv-w-row"><span>朝向</span><b>${agv.yaw_deg != null ? agv.yaw_deg.toFixed(1) + '°' : '—'}</b></div>
+      <div class="agv-w-row"><span>速度</span><b>${agv.speed != null ? agv.speed.toFixed(2) : '0'} m/s</b></div>
+      <div class="agv-w-row"><span>电池</span><b>${batTxt}${agv.charging ? ' · 充电中' : ''}</b></div>
+      <div class="agv-w-row"><span>急停</span><b style="color:${(agv.emergency||agv.soft_emc)?'var(--bad)':'var(--ok)'}">${(agv.emergency||agv.soft_emc)?'按下':'解除'}</b></div>
+      <div class="agv-w-row"><span>阻挡</span><b>${agv.blocked ? '是' : '否'}</b></div>
+      <div class="agv-w-row"><span>导航</span><b>${taskLabel}</b></div>
+      <div class="agv-w-row"><span>当前站</span><b>${rt.current || agv.current_station || '—'}</b></div>
+    `;
+  };
+  card._agvTick = setInterval(tick, 1000);
+  tick();
+}
+
+function destroyAgvStatusWidget(card) {
+  if (card._agvTick) clearInterval(card._agvTick);
+}
+
+function initNavWidget(card) {
+  const src = document.querySelector('#widgetSource .ops-inner');
+  if (src) {
+    const body = card.querySelector('.widget-body');
+    body.style.overflow = 'auto';
+    body.appendChild(src.cloneNode(true));
+    const clone = card.querySelector('.ops-inner');
+    clone.classList.add('nav-widget-inner');
+    clone.querySelectorAll('[id]').forEach((el) => {
+      el.classList.add('js-' + el.id);
+      el.removeAttribute('id');
+    });
+    clone.querySelector('.js-btnNavGo')?.addEventListener('click', () => navigateTo(clone.querySelector('.js-navStation')?.value));
+    clone.querySelector('.js-btnCancel')?.addEventListener('click', () => $('#btnCancel')?.click());
+    clone.querySelector('.js-btnRouteClear')?.addEventListener('click', () => $('#btnRouteClear')?.click());
+    clone.querySelector('.js-btnRouteStart')?.addEventListener('click', () => $('#btnRouteStart')?.click());
+    clone.querySelector('.js-btnAddStation')?.addEventListener('click', () => $('#btnAddStation')?.click());
+    clone.querySelector('.js-btnQrStart')?.addEventListener('click', () => $('#btnQrStart')?.click());
+    clone.querySelector('.js-btnQrStop')?.addEventListener('click', () => $('#btnQrStop')?.click());
+    const navSel = clone.querySelector('.js-navStation');
+    if (navSel) {
+      navSel.onchange = () => {
+        selectedNavStation = navSel.value;
+        document.querySelectorAll('#navStation, .js-navStation').forEach(el => { el.value = selectedNavStation; });
+        fillStationSelects();
+        drawMap();
+      };
+    }
+    fillStationSelects();
+  }
+}
+
+function destroyNavWidget(card) {
+  if (card._navSync) clearInterval(card._navSync);
+}
+
+function initLogWidget(card) {
+  const body = card.querySelector('.widget-body');
+  body.innerHTML = '<div id="globalOpLog" class="log-panel" style="max-height:100%;border:none;background:transparent;padding:0"></div>';
+  global.appendGlobalLog = (type, msg) => {
+    const log = document.getElementById('globalOpLog');
+    if (!log) return;
+    const time = new Date().toLocaleTimeString('zh-CN');
+    const colors = { action: '#3B82F6', success: '#10B981', error: '#EF4444', warning: '#F59E0B', state: '#6B7280', info: '#6B7280' };
+    const div = document.createElement('div');
+    div.style.color = colors[type] || '#8fa3b8';
+    div.textContent = `${time} ${msg}`;
+    log.prepend(div);
+    while (log.children.length > 120) log.lastChild.remove();
+  };
+}
+
+function initCloudWidget(card) {
+  const body = card.querySelector('.widget-body');
+  body.innerHTML = `
+    <label style="display:block;margin:4px 0"><input type="checkbox" id="wShowCloud" checked/> 显示点云</label>
+    <label style="font-size:.72rem;color:var(--muted)">点云大小 <input type="range" id="wCloudSize" min="1" max="6" value="2"/></label>
+    <div id="wCloudMeta" style="font-size:.68rem;color:var(--muted);margin-top:6px">—</div>
+  `;
+  const tick = () => {
+    const laser = state?.laser || {};
+    const el = document.getElementById('wCloudMeta');
+    if (el) el.textContent = `点数: ${laser.point_count ?? '—'} · ${laser.label || ''} · 地图点 ${state?.map?.cloud_shown ?? '—'}`;
+  };
+  const cb = document.getElementById('wShowCloud');
+  if (cb) {
+    cb.checked = mapLayers.lidar;
+    cb.onchange = () => {
+      mapLayers.lidar = cb.checked;
+      const a = document.getElementById('layerLidar');
+      if (a) a.checked = mapLayers.lidar;
+      drawMap();
+    };
+  }
+  card._cloudTick = setInterval(tick, 2000);
+  tick();
+}
+
+function destroyCloudWidget(card) {
+  if (card._cloudTick) clearInterval(card._cloudTick);
+}
+
+function initSystemMonitorWidget(card) {
+  const body = card.querySelector('.widget-body');
+  body.innerHTML = '<div id="sysMonitorBody" style="font-size:.72rem;line-height:1.5">加载中…</div>';
+  const tick = async () => {
+    const el = document.getElementById('sysMonitorBody');
+    if (!el) return;
+    try {
+      const ctrl = new AbortController();
+      const t = setTimeout(() => ctrl.abort(), 5000);
+      const j = await fetch('/api/health', { signal: ctrl.signal }).then(r => r.json()).finally(() => clearTimeout(t));
+      const uptime = j.uptime_sec != null ? Math.floor(j.uptime_sec) + 's' : '—';
+      const nh = j.nodes_health || {};
+      const nodes = Object.entries(nh).map(([k, v]) => `${k}: ${v ? '✓' : '✗'}`).join(' · ') || '—';
+      el.innerHTML = `
+        <div>版本 <b>${j.version || '—'}</b></div>
+        <div>AGV <b>${j.agv_online ? '在线' : '离线'}</b> · 运行 <b>${uptime}</b></div>
+        <div>激光 <b>${j.laser_ok ? 'OK' : '—'}</b></div>
+        <div style="margin-top:4px;color:var(--muted)">${nodes}</div>`;
+    } catch (e) {
+      el.textContent = '监控加载失败';
+    }
+  };
+  card._sysTick = setInterval(tick, 3000);
+  tick();
+}
+
+function destroySystemMonitorWidget(card) {
+  if (card._sysTick) clearInterval(card._sysTick);
+}
+
+window.WIDGET_REGISTRY = {
+  jason_camera_a: { title: '📷 Jason Camera-A', adopt: '#cardFloor', defaultW: 300, defaultH: 340, defaultX: 16, defaultY: 70 },
+  jason_camera_b: { title: '📷 Wrist Camera (Pylon 腕部)', adopt: '#cardWrist', defaultW: 360, defaultH: 420, minW: 280, minH: 280, defaultX: 330, defaultY: 70 },
+  leo_camera: { title: '📷 Leo Camera', adopt: '#cardLeo', defaultW: 320, defaultH: 380, minW: 260, minH: 260, defaultX: 640, defaultY: 70 },
+  arm_control: { title: '🤖 机械臂控制', defaultW: 320, defaultH: 420, defaultX: 16, defaultY: 420, init: (c) => initArmWidget(c), destroy: () => destroyArmWidget() },
+  agv_status: { title: '🚗 AGV 状态', defaultW: 240, defaultH: 220, defaultX: 350, defaultY: 420, init: initAgvStatusWidget, destroy: destroyAgvStatusWidget },
+  nav_control: { title: '🗺️ 导航控制', defaultW: 440, defaultH: 520, minW: 380, minH: 340, defaultX: 610, defaultY: 360, init: initNavWidget, destroy: destroyNavWidget },
+  pointcloud: { title: '☁️ 点云设置', defaultW: 220, defaultH: 160, defaultX: 610, defaultY: 700, init: initCloudWidget, destroy: destroyCloudWidget },
+  operation_log: { title: '📋 操作日志', defaultW: 280, defaultH: 200, defaultX: 350, defaultY: 660, init: initLogWidget },
+  system_monitor: { title: '📊 系统监控', defaultW: 260, defaultH: 180, defaultX: 840, defaultY: 420, init: initSystemMonitorWidget, destroy: destroySystemMonitorWidget },
+  verbose_log: { title: '🔍 全量日志', defaultW: 360, defaultH: 480, defaultX: 840, defaultY: 70, init: (c) => initVerboseLogWidget(c) },
+};
+
+window.onVerboseStatusChange = function (status) {
+  const enabled = Object.entries(status || {}).filter(([, v]) => v).map(([k]) => {
+    const labels = window.VERBOSE_MODULE_LABELS || {};
+    return labels[k] || k;
+  });
+  if (typeof window.appendGlobalLog !== 'function') return;
+  if (enabled.length > 0) {
+    window.appendGlobalLog('warning', `⚠️ 全量日志已开启: [${enabled.join('] [')}]`);
+  } else {
+    window.appendGlobalLog('info', '全量日志已全部关闭');
+  }
+};
+
+function initWidgets() {
+  if (window.__widgetsInited) return;
+  window.__widgetsInited = true;
+  widgetMgr = new WidgetManager('widgetLayer');
+  const defaults = ['agv_status', 'operation_log'];
+  widgetMgr.restoreFromStorage(defaults);
+  $('#btnAddWidget')?.addEventListener('click', () => widgetMgr.openPicker());
+  $('#btnWidgetPickerClose')?.addEventListener('click', () => widgetMgr.closePicker());
+  $('#widgetPickerBackdrop')?.addEventListener('click', () => widgetMgr.closePicker());
+  window.addEventListener('resize', () => {
+    if (!widgetMgr) return;
+    widgetMgr.widgets.forEach((card) => widgetMgr._clampCard(card));
+    widgetMgr._scheduleSaveLayout();
+  });
+}
+
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', initWidgets);
+} else {
+  initWidgets();
+}
+</script>
+</body>
+</html>

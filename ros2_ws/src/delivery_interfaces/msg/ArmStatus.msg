@@ -1,0 +1,11 @@
+std_msgs/Header header
+string arm_name
+bool connected
+bool is_moving
+bool error
+uint8 mode
+string mode_name
+float64[7] joint_positions
+geometry_msgs/Pose tcp_pose
+string current_sequence
+string error_msg

@@ -1,0 +1,8 @@
+image: map.pgm
+resolution: 0.05
+origin: [-11.8090, -28.6200, 0.0]
+negate: 0
+occupied_thresh: 0.65
+free_thresh: 0.25
+# source: D:\Cursor\AGV项目\agv_downloaded\maps\20260723112931750.smap
+# name: 20260723112931750

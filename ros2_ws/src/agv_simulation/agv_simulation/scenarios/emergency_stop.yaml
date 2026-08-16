@@ -1,0 +1,18 @@
+name: emergency_stop
+description: 急停测试 — 运动中突发障碍物
+map_size: [6.0, 2.0]
+start_pose: [-2.5, 0.0, 0.0]
+pickup_pose: [2.5, 0.0, 0.0]
+user_pose: [-2.5, 0.0, 3.14]
+obstacles:
+  - {x: -3.0, y: -1.0, r: 0.05, kind: wall}
+  - {x: -3.0, y:  1.0, r: 0.05, kind: wall}
+  - {x:  3.0, y: -1.0, r: 0.05, kind: wall}
+  - {x:  3.0, y:  1.0, r: 0.05, kind: wall}
+  # 在路径中点放一个不可逾越的障碍物 → AGV 应该触发急停
+  - {x:  0.0, y: 0.0, r: 1.5, kind: emergency}
+dynamic_obstacles: []
+max_duration_s: 30.0
+fail_conditions:
+  - timeout_without_stop
+  - collision

@@ -1,0 +1,214 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>AGV Camera — Jason Basler</title>
+  <style>
+    :root {
+      --bg: #0f1419;
+      --panel: #1a2332;
+      --text: #e8eef7;
+      --muted: #8aa0b8;
+      --ok: #2ecc71;
+      --warn: #f39c12;
+      --bad: #e74c3c;
+      --accent: #3498db;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: "Segoe UI", system-ui, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+    }
+    header {
+      padding: 16px 24px;
+      border-bottom: 1px solid #243044;
+      font-size: 20px;
+      font-weight: 600;
+    }
+    main {
+      max-width: 1100px;
+      margin: 0 auto;
+      padding: 20px;
+    }
+    .viewer {
+      background: #000;
+      border: 1px solid #243044;
+      border-radius: 8px;
+      aspect-ratio: 4 / 3;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      overflow: hidden;
+      position: relative;
+    }
+    .viewer img {
+      max-width: 100%;
+      max-height: 100%;
+      width: auto;
+      height: auto;
+      object-fit: contain;
+      display: block;
+    }
+    .placeholder {
+      color: var(--muted);
+      text-align: center;
+      padding: 24px;
+    }
+    .panel {
+      margin-top: 16px;
+      background: var(--panel);
+      border-radius: 8px;
+      padding: 16px 20px;
+      display: grid;
+      gap: 10px;
+    }
+    .row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 16px 32px;
+      align-items: center;
+    }
+    .label { color: var(--muted); }
+    .dot {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      display: inline-block;
+      margin-right: 6px;
+    }
+    .dot.online { background: var(--ok); }
+    .dot.offline { background: var(--bad); }
+    .dot.connecting { background: var(--warn); }
+    button {
+      background: var(--accent);
+      color: #fff;
+      border: none;
+      border-radius: 6px;
+      padding: 10px 18px;
+      font-size: 15px;
+      cursor: pointer;
+    }
+    button:disabled { opacity: 0.5; cursor: not-allowed; }
+    button.stop { background: #c0392b; }
+    .qr-result {
+      font-family: ui-monospace, monospace;
+      word-break: break-all;
+    }
+  </style>
+</head>
+<body>
+  <header>AGV Camera</header>
+  <main>
+    <div class="viewer" id="viewer">
+      <div class="placeholder" id="placeholder">Camera stream unavailable</div>
+      <img id="stream" alt="Basler camera" hidden />
+    </div>
+    <div class="panel">
+      <div class="row">
+        <span>Camera: <strong id="cameraId">my_camera</strong></span>
+        <span>Source: <strong id="source">REAL</strong></span>
+        <span><span class="dot offline" id="statusDot"></span><strong id="statusText">OFFLINE</strong></span>
+      </div>
+      <div class="row">
+        <span>FPS: <strong id="fps">--</strong></span>
+        <span>Resolution: <strong id="resolution">--</strong></span>
+        <span>Last frame: <strong id="lastFrame">--</strong></span>
+      </div>
+      <div class="row">
+        <span>QR Recognition: <strong id="qrState">OFF</strong></span>
+        <button id="qrBtn">开始二维码识别</button>
+      </div>
+      <div class="row">
+        <span class="label">Last QR Result:</span>
+        <span class="qr-result" id="qrResult">--</span>
+      </div>
+    </div>
+  </main>
+  <script>
+    const stream = document.getElementById('stream');
+    const placeholder = document.getElementById('placeholder');
+    const statusDot = document.getElementById('statusDot');
+    const statusText = document.getElementById('statusText');
+    const fpsEl = document.getElementById('fps');
+    const resolutionEl = document.getElementById('resolution');
+    const lastFrameEl = document.getElementById('lastFrame');
+    const qrStateEl = document.getElementById('qrState');
+    const qrResultEl = document.getElementById('qrResult');
+    const qrBtn = document.getElementById('qrBtn');
+
+    let qrRunning = false;
+
+    function setStatus(status) {
+      statusText.textContent = status;
+      statusDot.className = 'dot ' + (status === 'ONLINE' ? 'online' : status === 'CONNECTING' ? 'connecting' : 'offline');
+    }
+
+    async function pollStatus() {
+      try {
+        const res = await fetch('/api/jason/camera/status', { cache: 'no-store' });
+        const st = await res.json();
+        setStatus(st.status || 'OFFLINE');
+        fpsEl.textContent = st.fps != null ? st.fps + ' Hz' : '--';
+        if (st.width && st.height) {
+          resolutionEl.textContent = st.width + ' × ' + st.height;
+        }
+        if (st.last_frame_ms_ago != null) {
+          lastFrameEl.textContent = st.last_frame_ms_ago + ' ms ago';
+        } else {
+          lastFrameEl.textContent = '--';
+        }
+        qrRunning = st.qr_recognition === 'RUNNING';
+        qrStateEl.textContent = qrRunning ? 'RUNNING' : 'OFF';
+        qrBtn.textContent = qrRunning ? '停止二维码识别' : '开始二维码识别';
+        qrBtn.className = qrRunning ? 'stop' : '';
+        if (qrRunning) {
+          qrResultEl.textContent = st.last_qr_result && st.last_qr_result !== '--'
+            ? st.last_qr_result
+            : '等待识别…';
+        } else {
+          qrResultEl.textContent = '--';
+        }
+      } catch (e) {
+        setStatus('OFFLINE');
+      }
+    }
+
+    function pollSnapshot() {
+      fetch('/api/jason/camera/snapshot?t=' + Date.now(), { cache: 'no-store' })
+        .then(r => {
+          if (!r.ok) throw new Error('no frame');
+          return r.blob();
+        })
+        .then(blob => {
+          stream.src = URL.createObjectURL(blob);
+          stream.hidden = false;
+          placeholder.hidden = true;
+        })
+        .catch(() => {
+          stream.hidden = true;
+          placeholder.hidden = false;
+        });
+    }
+
+    qrBtn.addEventListener('click', async () => {
+      qrBtn.disabled = true;
+      const path = qrRunning ? '/api/jason/qr/stop' : '/api/jason/qr/start';
+      try {
+        await fetch(path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+        await pollStatus();
+      } finally {
+        qrBtn.disabled = false;
+      }
+    });
+
+    setInterval(pollStatus, 700);
+    setInterval(pollSnapshot, 700);
+    pollStatus();
+    pollSnapshot();
+  </script>
+</body>
+</html>

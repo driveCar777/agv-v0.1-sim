@@ -1,0 +1,161 @@
+<?xml version="1.0"?>
+<!--
+  AGV URDF — 仿真底盘。
+  robot_state_publisher + TF tree 来源。
+  双激光 (front + rear 对角安装)、4 路相机、12 超声、双 7DOF 臂。
+-->
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro" name="agv">
+
+  <xacro:property name="base_radius"   value="0.30"/>
+  <xacro:property name="base_height"   value="0.20"/>
+  <xacro:property name="base_mass"     value="320.0"/>
+  <xacro:property name="wheel_radius"  value="0.10"/>
+  <xacro:property name="wheel_width"   value="0.06"/>
+
+  <xacro:property name="lidar_front_x" value="0.32"/>
+  <xacro:property name="lidar_front_y" value="0.18"/>
+  <xacro:property name="lidar_front_z" value="0.30"/>
+  <xacro:property name="lidar_rear_x"  value="-0.32"/>
+  <xacro:property name="lidar_rear_y"  value="-0.18"/>
+  <xacro:property name="lidar_rear_z"  value="0.30"/>
+
+  <link name="base_link">
+    <visual>
+      <origin xyz="0 0 ${base_height/2}" rpy="0 0 0"/>
+      <geometry>
+        <cylinder radius="${base_radius}" length="${base_height}"/>
+      </geometry>
+      <material name="grey"><color rgba="0.5 0.5 0.5 1.0"/></material>
+    </visual>
+    <collision>
+      <origin xyz="0 0 ${base_height/2}" rpy="0 0 0"/>
+      <geometry><cylinder radius="${base_radius}" length="${base_height}"/></geometry>
+    </collision>
+    <inertial>
+      <mass value="${base_mass}"/>
+      <inertia ixx="20.0" ixy="0" ixz="0" iyy="20.0" iyz="0" izz="15.0"/>
+    </inertial>
+  </link>
+
+  <!-- 4 轮 -->
+  <xacro:macro name="wheel" params="prefix x y">
+    <link name="${prefix}">
+      <visual>
+        <origin xyz="0 0 0" rpy="1.5708 0 0"/>
+        <geometry><cylinder radius="${wheel_radius}" length="${wheel_width}"/></geometry>
+      </visual>
+      <collision>
+        <origin xyz="0 0 0" rpy="1.5708 0 0"/>
+        <geometry><cylinder radius="${wheel_radius}" length="${wheel_width}"/></geometry>
+      </collision>
+      <inertial>
+        <mass value="3.0"/>
+        <inertia ixx="0.05" ixy="0" ixz="0" iyy="0.05" iyz="0" izz="0.05"/>
+      </inertial>
+    </link>
+    <joint name="base_to_${prefix}" type="fixed">
+      <parent link="base_link"/>
+      <child link="${prefix}"/>
+      <origin xyz="${x}" y="${y}" z="${wheel_radius}" rpy="0 0 0"/>
+    </joint>
+  </xacro:macro>
+
+  <xacro:wheel prefix="wheel_fl" x="0.20"  y="0.20"/>
+  <xacro:wheel prefix="wheel_fr" x="0.20"  y="-0.20"/>
+  <xacro:wheel prefix="wheel_rl" x="-0.20" y="0.20"/>
+  <xacro:wheel prefix="wheel_rr" x="-0.20" y="-0.20"/>
+
+  <!-- 双激光 -->
+  <link name="lidar_front">
+    <visual>
+      <origin xyz="0 0 0.04" rpy="0 0 0"/>
+      <geometry><cylinder radius="0.04" length="0.08"/></geometry>
+      <material name="blue"><color rgba="0.0 0.0 1.0 1.0"/></material>
+    </visual>
+    <inertial>
+      <mass value="0.5"/>
+      <inertia ixx="0.01" ixy="0" ixz="0" iyy="0.01" iyz="0" izz="0.01"/>
+    </inertial>
+  </link>
+  <joint name="base_to_lidar_front" type="fixed">
+    <parent link="base_link"/><child link="lidar_front"/>
+    <origin xyz="${lidar_front_x}" y="${lidar_front_y}" z="${lidar_front_z}"/>
+  </joint>
+
+  <link name="lidar_rear">
+    <visual>
+      <origin xyz="0 0 0.04" rpy="0 0 0"/>
+      <geometry><cylinder radius="0.04" length="0.08"/></geometry>
+      <material name="blue"><color rgba="0.0 0.0 1.0 1.0"/></material>
+    </visual>
+    <inertial>
+      <mass value="0.5"/>
+      <inertia ixx="0.01" ixy="0" ixz="0" iyy="0.01" iyz="0" izz="0.01"/>
+    </inertial>
+  </link>
+  <joint name="base_to_lidar_rear" type="fixed">
+    <parent link="base_link"/><child link="lidar_rear"/>
+    <origin xyz="${lidar_rear_x}" y="${lidar_rear_y}" z="${lidar_rear_z}"/>
+  </joint>
+
+  <!-- 4 路相机 -->
+  <link name="camera_front"/>
+  <joint name="base_to_camera_front" type="fixed">
+    <parent link="base_link"/><child link="camera_front"/>
+    <origin xyz="0.35 0.0 0.28" rpy="0 0 0"/>
+  </joint>
+
+  <link name="camera_rear"/>
+  <joint name="base_to_camera_rear" type="fixed">
+    <parent link="base_link"/><child link="camera_rear"/>
+    <origin xyz="-0.35 0.0 0.28" rpy="0 0 3.1416"/>
+  </joint>
+
+  <link name="camera_down"/>
+  <joint name="base_to_camera_down" type="fixed">
+    <parent link="base_link"/><child link="camera_down"/>
+    <origin xyz="0.0 0.0 0.05" rpy="0 -1.5708 0"/>
+  </joint>
+
+  <link name="wrist_camera"/>
+  <joint name="base_to_wrist_camera" type="fixed">
+    <parent link="base_link"/><child link="wrist_camera"/>
+    <origin xyz="0.15 0.0 0.85" rpy="0 0 0"/>
+  </joint>
+
+  <!-- 12 超声 -->
+  <xacro:macro name="ultrasonic" params="prefix x y z yaw">
+    <link name="${prefix}"/>
+    <joint name="base_to_${prefix}" type="fixed">
+      <parent link="base_link"/><child link="${prefix}"/>
+      <origin xyz="${x}" y="${y}" z="${z}" rpy="0 0 ${yaw}"/>
+    </joint>
+  </xacro:macro>
+
+  <xacro:ultrasonic prefix="ultrasonic_01" x="0.30"  y="0.0"   z="0.10" yaw="0.0"/>
+  <xacro:ultrasonic prefix="ultrasonic_02" x="0.21"  y="0.21"  z="0.10" yaw="0.523"/>
+  <xacro:ultrasonic prefix="ultrasonic_03" x="0.0"   y="0.30"  z="0.10" yaw="1.047"/>
+  <xacro:ultrasonic prefix="ultrasonic_04" x="-0.21" y="0.21"  z="0.10" yaw="1.571"/>
+  <xacro:ultrasonic prefix="ultrasonic_05" x="-0.30" y="0.0"   z="0.10" yaw="2.094"/>
+  <xacro:ultrasonic prefix="ultrasonic_06" x="-0.21" y="-0.21" z="0.10" yaw="2.618"/>
+  <xacro:ultrasonic prefix="ultrasonic_07" x="0.0"   y="-0.30" z="0.10" yaw="3.142"/>
+  <xacro:ultrasonic prefix="ultrasonic_08" x="0.21"  y="-0.21" z="0.10" yaw="3.665"/>
+  <xacro:ultrasonic prefix="ultrasonic_09" x="0.15"  y="0.0"   z="0.10" yaw="0.262"/>
+  <xacro:ultrasonic prefix="ultrasonic_10" x="0.0"   y="0.15"  z="0.10" yaw="0.785"/>
+  <xacro:ultrasonic prefix="ultrasonic_11" x="-0.15" y="0.0"   z="0.10" yaw="2.356"/>
+  <xacro:ultrasonic prefix="ultrasonic_12" x="0.0"   y="-0.15" z="0.10" yaw="3.927"/>
+
+  <!-- 双臂 -->
+  <link name="left_arm_base"/>
+  <joint name="base_to_left_arm_base" type="fixed">
+    <parent link="base_link"/><child link="left_arm_base"/>
+    <origin xyz="0.0 0.25 0.30" rpy="0 0 0"/>
+  </joint>
+
+  <link name="right_arm_base"/>
+  <joint name="base_to_right_arm_base" type="fixed">
+    <parent link="base_link"/><child link="right_arm_base"/>
+    <origin xyz="0.0 -0.25 0.30" rpy="0 0 0"/>
+  </joint>
+
+</robot>

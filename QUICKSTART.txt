@@ -1,0 +1,13 @@
+﻿AGV V0.1 Sim - Quick Start
+==========================
+1. Ubuntu 22.04 + ROS2 Humble
+2. bash scripts/install_deps_ubuntu22.sh
+3. bash scripts/build.sh
+4. bash scripts/start_full_sim_stack.sh
+5. Browser: http://127.0.0.1:19999/
+
+Offline defaults:
+  AGV_BACKEND=mock
+  REAL_ROBOT_ENABLED=false
+
+Docs: README.md / MANUAL_SIM.md / AGV_OFFLINE_DEPLOYMENT.md

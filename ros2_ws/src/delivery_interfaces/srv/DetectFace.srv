@@ -1,0 +1,13 @@
+# Detect faces on one camera frame (or latest buffer)
+string camera_name
+# optional: empty = use latest image; otherwise pass raw image
+string encoding
+uint32 width
+uint32 height
+uint8[] data
+bool require_liveness
+float32 min_confidence
+---
+bool success
+string message
+FaceDetection[] detections

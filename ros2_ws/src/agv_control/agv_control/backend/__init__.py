@@ -1,0 +1,1 @@
+"""Backend layer — mock/sim/real chassis backends."""

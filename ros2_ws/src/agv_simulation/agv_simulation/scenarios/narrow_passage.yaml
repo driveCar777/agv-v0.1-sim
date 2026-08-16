@@ -1,0 +1,19 @@
+name: narrow_passage
+description: 狭窄通道 — 验证最小通过宽度
+map_size: [6.0, 2.5]
+start_pose: [-2.5, 0.0, 0.0]
+pickup_pose: [2.5, 0.0, 0.0]
+user_pose: [-2.5, 0.0, 3.14]
+obstacles:
+  - {x: -1.0, y: -0.6, r: 0.05, kind: wall}
+  - {x: -1.0, y:  0.6, r: 0.05, kind: wall}
+  - {x:  0.0, y: -0.6, r: 0.05, kind: wall}
+  - {x:  0.0, y:  0.6, r: 0.05, kind: wall}
+  - {x:  1.0, y: -0.6, r: 0.05, kind: wall}
+  - {x:  1.0, y:  0.6, r: 0.05, kind: wall}
+dynamic_obstacles: []
+max_duration_s: 60.0
+fail_conditions:
+  - collision
+  - timeout
+  - stuck

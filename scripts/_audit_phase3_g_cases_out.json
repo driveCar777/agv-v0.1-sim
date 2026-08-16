@@ -1,0 +1,68 @@
+{
+  "G1": {
+    "ok": true,
+    "ratio": 1.0,
+    "turns": 0,
+    "min_c": 0.85,
+    "direct": true
+  },
+  "G2": {
+    "ok": true,
+    "ratio": 1.0,
+    "turns": 0,
+    "min_c": 0.85,
+    "direct": true
+  },
+  "G3": {
+    "ok": true,
+    "ratio": 3.045,
+    "turns": 8,
+    "min_c": 0.5,
+    "A_min_c": 0.354,
+    "A_turns": 108,
+    "direct": false
+  },
+  "G4": {
+    "ok": true,
+    "ratio": 3.044662121670707,
+    "turns": 8,
+    "min_c": 0.5,
+    "direct": false,
+    "len": 29.934755201250066
+  },
+  "G5": {
+    "ok": true,
+    "ratio": 1.0499766842929004,
+    "turns": 4,
+    "min_c": 0.5,
+    "direct": false
+  },
+  "G8": {
+    "ok": true,
+    "ratios": [
+      1.0671,
+      1.0671,
+      1.0671
+    ]
+  },
+  "G7_mppi": {
+    "ok": true,
+    "osc_w": 0,
+    "path_s0": 0.0,
+    "path_s1": 0.0,
+    "stop": "NONE"
+  },
+  "G7_pp": {
+    "ok": true,
+    "osc_w": 0,
+    "path_s0": 0.0,
+    "path_s1": 0.414,
+    "stop": "NONE"
+  },
+  "G6": {
+    "ok": true,
+    "g1": 1,
+    "g2": 1,
+    "plan_ok": true
+  }
+}

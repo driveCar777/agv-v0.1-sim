@@ -1,0 +1,14 @@
+# Identify / match against enrolled gallery
+string camera_name
+string encoding
+uint32 width
+uint32 height
+uint8[] data
+float32 min_confidence
+---
+bool success
+string message
+string person_id
+string person_name
+float32 confidence
+FaceDetection detection

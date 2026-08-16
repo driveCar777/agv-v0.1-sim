@@ -1,0 +1,15 @@
+# Goal
+string arm_name
+string sequence_name
+string[] waypoints_json
+---
+# Result
+bool success
+string message
+uint32 steps_done
+---
+# Feedback
+uint32 current_step
+uint32 total_steps
+string step_name
+float64[7] joint_positions

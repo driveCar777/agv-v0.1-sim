@@ -1,0 +1,1 @@
+"""Safety layer — watchdog + state machine."""

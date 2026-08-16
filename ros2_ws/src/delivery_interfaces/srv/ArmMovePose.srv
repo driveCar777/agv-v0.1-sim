@@ -1,0 +1,8 @@
+string arm_name
+geometry_msgs/Pose pose
+float64 speed
+float64 acc
+bool wait
+---
+bool success
+string message

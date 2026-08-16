@@ -1,0 +1,20 @@
+std_msgs/Header header
+# task_status: 0=NONE 2=RUNNING 3=SUSPENDED 4=COMPLETED 5=FAILED 6=CANCELED
+uint8 task_status
+uint8 task_type
+string target_id
+string[] finished_path
+string[] unfinished_path
+bool blocked
+bool emergency
+bool soft_emc
+float32 battery_level
+bool charging
+string current_map
+string vehicle_id
+float64 x
+float64 y
+float64 angle
+float64 confidence
+string current_station
+string mode

@@ -1,0 +1,6 @@
+string camera_name
+string code_type
+---
+bool success
+string message
+QrDetection[] detections

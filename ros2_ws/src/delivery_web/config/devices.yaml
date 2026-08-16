@@ -1,0 +1,58 @@
+# Phase C device configuration — no credentials
+web_vm:
+  host: 172.31.0.111
+  web_port: 19999
+  debug_port: 1999
+
+agv:
+  robokit_host: 192.168.18.198
+  jetson_host: 192.168.18.207
+
+floor_qr_scanner:
+  host: 172.31.0.91
+  port: 9004
+  protocol: keyence_tcp
+  ros_topic: /scanner/barcode
+  ros_trigger_service: /scanner/trigger
+
+wrist_camera:
+  host: 172.31.0.88
+  device_user_id: "106611-18"
+  model: acA2500-14gc
+  ros_image_topic: /my_camera/pylon_ros2_camera_node/image_raw
+  ros_image_topic_candidates:
+    - /my_camera/pylon_ros2_camera_node/image_raw
+    - /camera/wrist/image_raw
+  ros_compressed_topic: /my_camera/pylon_ros2_camera_node/image_raw/compressed
+  ros_qr_topic: /wechat_qr_node/decoded_info
+  ros_apriltag_topic: /detections
+
+leo_face:
+  jetson_host: 172.31.0.85
+  camera_host: 172.31.0.87
+  ros_domain_id: 30
+  status: developing
+
+xarm7:
+  host: 172.31.0.123
+  model: UFACTORY-xArm7
+  ros_joint_topic: /joint_states
+  ros_state_topic: /pick_place_state
+  service_unlock: /unlock_and_home
+  service_pick_place: /do_pick_place
+  service_gripper: /set_gripper
+  default_arm_mode: simulation
+
+ros:
+  domain_id: 30
+
+localization:
+  position_error_warn_m: 0.20
+  position_error_error_m: 0.30
+  angle_error_warn_deg: 10.0
+  angle_error_error_deg: 15.0
+
+env_modes:
+  dev: Gazebo / ROS simulation
+  demo: Real Robokit TCP AGV
+  mock: Robokit TCP Mock server

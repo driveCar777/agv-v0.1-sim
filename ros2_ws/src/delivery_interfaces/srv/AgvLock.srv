@@ -1,0 +1,5 @@
+bool lock
+string nick_name
+---
+bool success
+string message

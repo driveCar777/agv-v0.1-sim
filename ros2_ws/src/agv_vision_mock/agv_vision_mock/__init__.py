@@ -1,0 +1,1 @@
+"""AGV Mock Vision — face / qr / object / image. 完全离线。"""

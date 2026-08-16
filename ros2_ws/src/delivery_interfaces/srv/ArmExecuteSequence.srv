@@ -1,0 +1,8 @@
+string arm_name
+string sequence_name
+string[] waypoints_json
+bool wait
+---
+bool success
+string message
+uint32 steps_done

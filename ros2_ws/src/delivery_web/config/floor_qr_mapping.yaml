@@ -1,0 +1,18 @@
+# Floor QR ID → map station pose (world frame, meters / radians)
+# Populate from Roboshop / smap LocationMark. Unknown IDs → localization BLOCKED for coords.
+mappings:
+  STATION_LM1:
+    station_id: LM1
+    x: 0.0
+    y: 0.0
+    angle: 0.0
+  STATION_LM2:
+    station_id: LM2
+    x: 2.0
+    y: 0.0
+    angle: 0.0
+  LM3:
+    station_id: LM3
+    x: 2.0
+    y: 2.0
+    angle: 1.57

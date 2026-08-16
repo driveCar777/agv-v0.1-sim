@@ -1,0 +1,20 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>agv_bringup</name>
+  <version>0.1.0</version>
+  <description>AGV unified bringup: sim / nav / real.</description>
+  <maintainer email="agv-team@example.com">AGV Team</maintainer>
+  <license>Apache-2.0</license>
+  <depend>agv_control</depend>
+  <depend>agv_navigation</depend>
+  <depend>agv_safety</depend>
+  <depend>agv_mission</depend>
+  <depend>agv_tf</depend>
+  <depend>agv_lidar</depend>
+  <depend>agv_ultrasonic</depend>
+  <depend>agv_simulation</depend>
+  <depend>delivery_web</depend>
+  <depend>camera_bridge</depend>
+  <export><build_type>ament_python</build_type></export>
+</package>

@@ -1,0 +1,12 @@
+std_msgs/Header header
+string camera_name
+string code_type
+string payload
+float64 x
+float64 y
+float64 z
+float64 yaw
+float64 pitch
+float64 roll
+float64 confidence
+float32[] corners_2d

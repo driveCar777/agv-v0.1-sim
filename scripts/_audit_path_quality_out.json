@@ -1,0 +1,546 @@
+{
+  "start": [
+    6.26,
+    -0.659
+  ],
+  "robot_r": 0.25,
+  "cases": [
+    {
+      "name": "G1_open_+2x",
+      "start_world": [
+        6.26,
+        -0.659
+      ],
+      "goal_world": [
+        8.26,
+        -0.659
+      ],
+      "start_grid": [
+        72,
+        111
+      ],
+      "goal_grid": [
+        80,
+        111
+      ],
+      "start_snap": [
+        6.316000000000001,
+        -0.745000000000001
+      ],
+      "goal_snap": [
+        8.316,
+        -0.745000000000001
+      ],
+      "goal_snap_err": 0.1026255328853413,
+      "DIRECT_PATH_SAFE": true,
+      "DIRECT_PATH_SAFE_SNAP": true,
+      "A_STAR_LENGTH": 2.0,
+      "DIRECT_LENGTH": 2.0,
+      "RATIO": 1.0,
+      "n_points": 5,
+      "n_turns": 3,
+      "max_turn": 0.0,
+      "avg_turn": 0.0,
+      "turns_gt30": 0,
+      "turns_gt60": 0,
+      "turns_90ish": 0,
+      "min_clearance": 1.25,
+      "mean_clearance": 1.436,
+      "pct_within_0.05": 0.0,
+      "pct_within_0.10": 0.0,
+      "pct_within_0.20": 0.0,
+      "pct_within_0.30": 0.0,
+      "colinear_mergeable": 3,
+      "los_kept": 2,
+      "los_removed": 3,
+      "plan_ms": 0.3,
+      "path_preview": [
+        [
+          6.32,
+          -0.75
+        ],
+        [
+          6.82,
+          -0.75
+        ],
+        [
+          7.32,
+          -0.75
+        ],
+        [
+          7.82,
+          -0.75
+        ],
+        [
+          8.32,
+          -0.75
+        ]
+      ]
+    },
+    {
+      "name": "G2_south_-4y",
+      "start_world": [
+        6.26,
+        -0.659
+      ],
+      "goal_world": [
+        6.26,
+        -4.659
+      ],
+      "start_grid": [
+        72,
+        111
+      ],
+      "goal_grid": [
+        72,
+        95
+      ],
+      "start_snap": [
+        6.316000000000001,
+        -0.745000000000001
+      ],
+      "goal_snap": [
+        6.316000000000001,
+        -4.745000000000001
+      ],
+      "goal_snap_err": 0.1026255328853415,
+      "DIRECT_PATH_SAFE": true,
+      "DIRECT_PATH_SAFE_SNAP": true,
+      "A_STAR_LENGTH": 4.0,
+      "DIRECT_LENGTH": 4.0,
+      "RATIO": 1.0,
+      "n_points": 9,
+      "n_turns": 7,
+      "max_turn": 0.0,
+      "avg_turn": 0.0,
+      "turns_gt30": 0,
+      "turns_gt60": 0,
+      "turns_90ish": 0,
+      "min_clearance": 0.75,
+      "mean_clearance": 0.926,
+      "pct_within_0.05": 0.0,
+      "pct_within_0.10": 0.0,
+      "pct_within_0.20": 0.0,
+      "pct_within_0.30": 0.0,
+      "colinear_mergeable": 7,
+      "los_kept": 2,
+      "los_removed": 7,
+      "plan_ms": 0.4,
+      "path_preview": [
+        [
+          6.32,
+          -0.75
+        ],
+        [
+          6.32,
+          -1.25
+        ],
+        [
+          6.32,
+          -1.75
+        ],
+        [
+          6.32,
+          -2.25
+        ],
+        [
+          6.32,
+          -2.75
+        ],
+        [
+          6.32,
+          -3.25
+        ],
+        [
+          6.32,
+          -3.75
+        ],
+        [
+          6.32,
+          -4.25
+        ],
+        "...",
+        [
+          6.32,
+          -4.25
+        ],
+        [
+          6.32,
+          -4.75
+        ]
+      ]
+    },
+    {
+      "name": "G_diag_+5_-5",
+      "start_world": [
+        6.26,
+        -0.659
+      ],
+      "goal_world": [
+        11.26,
+        -5.659
+      ],
+      "start_grid": [
+        72,
+        111
+      ],
+      "goal_grid": [
+        92,
+        91
+      ],
+      "start_snap": [
+        6.316000000000001,
+        -0.745000000000001
+      ],
+      "goal_snap": [
+        11.316,
+        -5.745000000000001
+      ],
+      "goal_snap_err": 0.1026255328853415,
+      "DIRECT_PATH_SAFE": false,
+      "DIRECT_PATH_SAFE_SNAP": false,
+      "A_STAR_LENGTH": 7.638,
+      "DIRECT_LENGTH": 7.071,
+      "RATIO": 1.08,
+      "n_points": 18,
+      "n_turns": 16,
+      "max_turn": 45.0,
+      "avg_turn": 10.7,
+      "turns_gt30": 1,
+      "turns_gt60": 0,
+      "turns_90ish": 0,
+      "min_clearance": 0.354,
+      "mean_clearance": 0.763,
+      "pct_within_0.05": 0.0,
+      "pct_within_0.10": 0.0,
+      "pct_within_0.20": 0.0,
+      "pct_within_0.30": 0.0,
+      "colinear_mergeable": 9,
+      "los_kept": 5,
+      "los_removed": 13,
+      "plan_ms": 3.7,
+      "path_preview": [
+        [
+          6.32,
+          -0.75
+        ],
+        [
+          6.57,
+          -1.0
+        ],
+        [
+          7.07,
+          -1.25
+        ],
+        [
+          7.32,
+          -1.5
+        ],
+        [
+          7.57,
+          -1.75
+        ],
+        [
+          8.07,
+          -1.75
+        ],
+        [
+          8.57,
+          -1.75
+        ],
+        [
+          9.07,
+          -2.0
+        ],
+        "...",
+        [
+          11.32,
+          -5.5
+        ],
+        [
+          11.32,
+          -5.75
+        ]
+      ]
+    },
+    {
+      "name": "G_far_+8x",
+      "start_world": [
+        6.26,
+        -0.659
+      ],
+      "goal_world": [
+        14.26,
+        -0.659
+      ],
+      "start_grid": [
+        72,
+        111
+      ],
+      "goal_grid": [
+        104,
+        111
+      ],
+      "start_snap": [
+        6.316000000000001,
+        -0.745000000000001
+      ],
+      "goal_snap": [
+        14.316,
+        -0.745000000000001
+      ],
+      "goal_snap_err": 0.1026255328853413,
+      "DIRECT_PATH_SAFE": false,
+      "DIRECT_PATH_SAFE_SNAP": false,
+      "A_STAR_LENGTH": 8.739,
+      "DIRECT_LENGTH": 8.0,
+      "RATIO": 1.092,
+      "n_points": 20,
+      "n_turns": 18,
+      "max_turn": 45.0,
+      "avg_turn": 16.5,
+      "turns_gt30": 5,
+      "turns_gt60": 0,
+      "turns_90ish": 0,
+      "min_clearance": 0.354,
+      "mean_clearance": 0.77,
+      "pct_within_0.05": 0.0,
+      "pct_within_0.10": 0.0,
+      "pct_within_0.20": 0.0,
+      "pct_within_0.30": 0.0,
+      "colinear_mergeable": 10,
+      "los_kept": 4,
+      "los_removed": 16,
+      "plan_ms": 4.9,
+      "path_preview": [
+        [
+          6.32,
+          -0.75
+        ],
+        [
+          6.82,
+          -0.75
+        ],
+        [
+          7.32,
+          -0.75
+        ],
+        [
+          7.82,
+          -0.75
+        ],
+        [
+          8.07,
+          -0.5
+        ],
+        [
+          8.32,
+          -0.25
+        ],
+        [
+          8.82,
+          -0.25
+        ],
+        [
+          9.32,
+          -0.25
+        ],
+        "...",
+        [
+          13.82,
+          -0.5
+        ],
+        [
+          14.32,
+          -0.75
+        ]
+      ]
+    },
+    {
+      "name": "far_poi_P4410",
+      "start_world": [
+        6.26,
+        -0.659
+      ],
+      "goal_world": [
+        10.642785714285713,
+        -11.934107142857144
+      ],
+      "start_grid": [
+        72,
+        111
+      ],
+      "goal_grid": [
+        89,
+        66
+      ],
+      "start_snap": [
+        6.316000000000001,
+        -0.745000000000001
+      ],
+      "goal_snap": [
+        10.566,
+        -11.995000000000001
+      ],
+      "goal_snap_err": 0.09799992841521603,
+      "DIRECT_PATH_SAFE": false,
+      "DIRECT_PATH_SAFE_SNAP": false,
+      "A_STAR_LENGTH": 12.877,
+      "DIRECT_LENGTH": 12.097,
+      "RATIO": 1.064,
+      "n_points": 31,
+      "n_turns": 29,
+      "max_turn": 45.0,
+      "avg_turn": 12.4,
+      "turns_gt30": 6,
+      "turns_gt60": 0,
+      "turns_90ish": 0,
+      "min_clearance": 0.354,
+      "mean_clearance": 0.717,
+      "pct_within_0.05": 0.0,
+      "pct_within_0.10": 0.0,
+      "pct_within_0.20": 0.0,
+      "pct_within_0.30": 0.0,
+      "colinear_mergeable": 19,
+      "los_kept": 4,
+      "los_removed": 27,
+      "plan_ms": 6.5,
+      "path_preview": [
+        [
+          6.32,
+          -0.75
+        ],
+        [
+          6.32,
+          -1.25
+        ],
+        [
+          6.32,
+          -1.75
+        ],
+        [
+          6.32,
+          -2.25
+        ],
+        [
+          6.57,
+          -2.5
+        ],
+        [
+          6.82,
+          -2.75
+        ],
+        [
+          6.82,
+          -3.25
+        ],
+        [
+          6.82,
+          -3.75
+        ],
+        "...",
+        [
+          10.57,
+          -11.75
+        ],
+        [
+          10.57,
+          -12.0
+        ]
+      ]
+    },
+    {
+      "name": "south_poi_LM4",
+      "start_world": [
+        6.26,
+        -0.659
+      ],
+      "goal_world": [
+        6.26,
+        -6.268
+      ],
+      "start_grid": [
+        72,
+        111
+      ],
+      "goal_grid": [
+        72,
+        89
+      ],
+      "start_snap": [
+        6.316000000000001,
+        -0.745000000000001
+      ],
+      "goal_snap": [
+        6.316000000000001,
+        -6.245000000000001
+      ],
+      "goal_snap_err": 0.060539243470661655,
+      "DIRECT_PATH_SAFE": true,
+      "DIRECT_PATH_SAFE_SNAP": true,
+      "A_STAR_LENGTH": 5.5,
+      "DIRECT_LENGTH": 5.609,
+      "RATIO": 0.981,
+      "n_points": 12,
+      "n_turns": 10,
+      "max_turn": 0.0,
+      "avg_turn": 0.0,
+      "turns_gt30": 0,
+      "turns_gt60": 0,
+      "turns_90ish": 0,
+      "min_clearance": 0.75,
+      "mean_clearance": 1.039,
+      "pct_within_0.05": 0.0,
+      "pct_within_0.10": 0.0,
+      "pct_within_0.20": 0.0,
+      "pct_within_0.30": 0.0,
+      "colinear_mergeable": 10,
+      "los_kept": 2,
+      "los_removed": 10,
+      "plan_ms": 0.6,
+      "path_preview": [
+        [
+          6.32,
+          -0.75
+        ],
+        [
+          6.32,
+          -1.25
+        ],
+        [
+          6.32,
+          -1.75
+        ],
+        [
+          6.32,
+          -2.25
+        ],
+        [
+          6.32,
+          -2.75
+        ],
+        [
+          6.32,
+          -3.25
+        ],
+        [
+          6.32,
+          -3.75
+        ],
+        [
+          6.32,
+          -4.25
+        ],
+        "...",
+        [
+          6.32,
+          -5.75
+        ],
+        [
+          6.32,
+          -6.25
+        ]
+      ]
+    }
+  ]
+}

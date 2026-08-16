@@ -1,0 +1,25 @@
+name: obstacle_corridor
+description: 走廊场景 — 两侧障碍物夹击
+map_size: [6.0, 2.0]
+start_pose: [0.0, 0.0, 0.0]
+pickup_pose: [3.0, 0.0, 0.0]
+user_pose: [-3.0, 0.0, 3.14]
+obstacles:
+  - {x: -2.0, y: -1.0, r: 0.15, kind: static}
+  - {x: -1.0, y: -1.0, r: 0.15, kind: static}
+  - {x:  0.0, y: -1.0, r: 0.15, kind: static}
+  - {x:  1.0, y: -1.0, r: 0.15, kind: static}
+  - {x:  2.0, y: -1.0, r: 0.15, kind: static}
+  - {x:  3.0, y: -1.0, r: 0.15, kind: static}
+  - {x: -2.0, y:  1.0, r: 0.15, kind: static}
+  - {x: -1.0, y:  1.0, r: 0.15, kind: static}
+  - {x:  0.0, y:  1.0, r: 0.15, kind: static}
+  - {x:  1.0, y:  1.0, r: 0.15, kind: static}
+  - {x:  2.0, y:  1.0, r: 0.15, kind: static}
+  - {x:  3.0, y:  1.0, r: 0.15, kind: static}
+dynamic_obstacles: []
+max_duration_s: 45.0
+fail_conditions:
+  - collision
+  - timeout
+  - stuck

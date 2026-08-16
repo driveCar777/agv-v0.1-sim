@@ -1,0 +1,65 @@
+# AGV Web V0.51.4 — 本地仿真配置（Mock / Dev Sim）
+# 复制到 delivery_web/config/devices.yaml 或设 DELIVERY_DEVICES_YAML 指向本文件
+
+web_vm:
+  host: 127.0.0.1
+  web_port: 19999
+  debug_port: 1999
+
+release:
+  use_sim_cameras: true
+
+agv:
+  robokit_host: 127.0.0.1
+  jetson_host: 127.0.0.1
+
+floor_qr_scanner:
+  host: 127.0.0.1
+  port: 9004
+  protocol: mock
+  ros_topic: /scanner/barcode
+  ros_trigger_service: /scanner/trigger
+
+wrist_camera:
+  host: 127.0.0.1
+  ros_image_topic: /camera/wrist/image_raw
+  ros_image_topic_candidates:
+    - /camera/wrist/image_raw
+  ros_compressed_topic: ""
+  ros_qr_topic: /wechat_qr_node/decoded_info
+  ros_apriltag_topic: /detections
+
+leo_face:
+  jetson_host: 127.0.0.1
+  camera_host: 127.0.0.1
+  camera_name: cam_front
+  ros_domain_id: 30
+  ros_result_topic: /face/cam_front/recognition_result
+  ros_continuous_service: /face/cam_front/continuous_recognition
+  ros_capture_service: /face/cam_front/capture_and_recognize
+  status: mock
+
+xarm7:
+  host: 127.0.0.1
+  ros_local: true
+  model: UFACTORY-xArm7
+  ros_joint_topic: /joint_states
+  ros_state_topic: /pick_place_state
+  service_unlock: /unlock_and_home
+  service_pick_place: /do_pick_place
+  service_gripper: /set_gripper
+  default_arm_mode: simulation
+
+ros:
+  domain_id: 30
+
+localization:
+  position_error_warn_m: 0.20
+  position_error_error_m: 0.30
+  angle_error_warn_deg: 10.0
+  angle_error_error_deg: 15.0
+
+env_modes:
+  dev: ROS agv_sim_node offline simulation
+  demo: Real Robokit TCP AGV
+  mock: Robokit TCP Mock server (127.0.0.1)
