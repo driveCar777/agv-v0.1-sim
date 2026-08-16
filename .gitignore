@@ -39,3 +39,6 @@ secrets*
 
 # Node (if any)
 node_modules/
+
+# Requires gh auth scope 'workflow' to push; keep local for now
+.github/workflows/
