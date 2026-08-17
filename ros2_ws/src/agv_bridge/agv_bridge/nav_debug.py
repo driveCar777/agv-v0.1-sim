@@ -172,12 +172,21 @@ def classify_motion_state(
     ax: float,
     phase: str,
     stop_reason: str,
+    planner_state: str = "NORMAL",
 ) -> str:
+    if planner_state == "LOCAL_RECOVERY" or stop_reason == "RECOVERY":
+        return "RECOVERY"
+    if planner_state == "LOCAL_PLAN_INFEASIBLE":
+        return "DEGRADED"
+    if planner_state == "NAVIGATION_FAILED" or stop_reason in ("NAVIGATION_FAILED", "FAILED"):
+        return "FAILED"
     if phase in ("reverse_escape", "recover") or stop_reason in ("STUCK_RECOVERY", "REVERSE_ESCAPE"):
         if state_vx < -0.03:
             return "REVERSE"
         return "RECOVERY"
-    if phase == "safe_stop" or stop_reason == "FAILED":
+    if phase == "safe_stop" and stop_reason == "NAVIGATION_FAILED":
+        return "FAILED"
+    if phase == "safe_stop" or stop_reason in ("SAFE_STOP",):
         return "STOPPED"
     if abs(state_vx) < 0.03 and abs(state_w) < 0.05:
         return "STOPPED"

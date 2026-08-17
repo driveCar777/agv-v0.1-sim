@@ -52,6 +52,15 @@ from agv_bridge.nav_footprint import current_footprint_clearance
 from agv_bridge.nav_side_probe import run_side_probe
 from agv_bridge.nav_avoidance_phase import AvoidancePhaseTracker
 from agv_bridge.nav_dynamic_resume import DynamicResumeTracker
+from agv_bridge.nav_planner_state import (
+    LOCAL_PLAN_INFEASIBLE,
+    LOCAL_RECOVERY,
+    NAVIGATION_FAILED,
+    PLANNER_NORMAL,
+    PLANNER_SAFE_STOP,
+    REASON_MPPI_INFEASIBLE,
+)
+from agv_bridge.recovery.recovery_planner import RecoveryPlanner
 from agv_bridge.nav_recovery import (
     ACT_CONTINUE,
     ACT_HISTORICAL_RETREAT,
@@ -154,6 +163,11 @@ class LocalMppiModel:
         self.last_dynamic_state = None
         self.last_execution_corridor = None
         self._mppi_infeasible_streak = 0
+        self.recovery_planner = RecoveryPlanner()
+        self.planner_state = PLANNER_NORMAL
+        self.planner_failure_reason = ""
+        self.last_recovery_plan = None
+        self.recovery_vx_scale = 1.0
 
     def set_control_mode(self, mode: str) -> str:
         m = (mode or "mppi").strip().lower()
@@ -195,6 +209,11 @@ class LocalMppiModel:
         self.last_dynamic_state = None
         self.last_execution_corridor = None
         self._mppi_infeasible_streak = 0
+        self.recovery_planner.reset()
+        self.planner_state = PLANNER_NORMAL
+        self.planner_failure_reason = ""
+        self.last_recovery_plan = None
+        self.recovery_vx_scale = 1.0
 
     def begin_reverse_escape(self, now: float) -> bool:
         """Legacy hook — prefer ManeuverFSM + Policy.allow_recovery."""
@@ -998,7 +1017,7 @@ class LocalMppiModel:
             control_mode=self.control_mode,
             maneuver_mode=decision.mode,
             vx_min=decision.vx_min,
-            vx_max=decision.vx_max,
+            vx_max=decision.vx_max * float(self.recovery_vx_scale),
             force_vx=decision.force_vx,
             force_w=decision.force_w,
             path_follow_weight=pol.path_follow_weight,
@@ -1013,21 +1032,59 @@ class LocalMppiModel:
         failure_reason = str(getattr(self.mppi, "_last_meta", {}).get("failure_reason") or "")
         if failure_reason == "MPPI_NO_FEASIBLE_TRAJECTORY":
             self._mppi_infeasible_streak += 1
+            self.planner_failure_reason = REASON_MPPI_INFEASIBLE
+            committed = str(getattr(pol, "committed_side", None) or "NONE")
+            alt_avail = committed in ("LEFT", "RIGHT")
+            rec_plan = self.recovery_planner.on_planner_failure(
+                now=now,
+                failure_reason=failure_reason,
+                probe=self.last_probe,
+                dynamic_short=bool(dynamic_short),
+                dynamic_long=bool(dynamic_long),
+                committed_side=committed if committed != "NONE" else None,
+                alternate_side_available=alt_avail,
+            )
+            self.last_recovery_plan = rec_plan
+            self.planner_state = rec_plan.planner_state
+            self.recovery_vx_scale = float(rec_plan.vx_scale)
             if self.last_execution_corridor is not None:
-                self.last_execution_corridor.reason = "MPPI_INFEASIBLE_REPROBE"
-                self.last_execution_corridor.metadata["recovery_state"] = "REPROBE"
-                self.last_execution_corridor.metadata["recovery_attempt"] = self._mppi_infeasible_streak
-            if self._mppi_infeasible_streak >= 2:
+                meta = self.last_execution_corridor.metadata
+                meta["recovery_state"] = rec_plan.action
+                meta["recovery_attempt"] = self.recovery_planner.state.attempt_count
+                meta["planner_state"] = self.planner_state
+                meta["planner_failure_reason"] = self.planner_failure_reason
+            if rec_plan.request_reprobe:
+                try:
+                    self.probe.reset()
+                except Exception:
+                    pass
+            if rec_plan.release_commitment and self.policy.commitment.active:
+                self.policy.release_commitment(now=now, reason=f"RECOVERY|{rec_plan.action}")
+            if rec_plan.request_alternate_side:
                 try:
                     self.policy.note_replan(now)
                 except Exception:
                     pass
-                if self.last_execution_corridor is not None:
-                    self.last_execution_corridor.metadata["recovery_state"] = "REPLAN"
-            if self._mppi_infeasible_streak >= MAX_RECOVERY_ATTEMPTS and self.last_execution_corridor is not None:
-                self.last_execution_corridor.metadata["recovery_state"] = "SAFE_STOP_PENDING"
+            if rec_plan.request_global_replan:
+                try:
+                    self.policy.note_replan(now)
+                except Exception:
+                    pass
+            if rec_plan.navigation_failed:
+                self.planner_state = NAVIGATION_FAILED
+                self.phase = "safe_stop"
+                self.maneuver._set_mode(SAFE_STOP, now, "recovery_exhausted")
+            elif self.planner_state == LOCAL_RECOVERY:
+                self.phase = decision.legacy_phase if decision.mode != SAFE_STOP else "recover"
         else:
             self._mppi_infeasible_streak = 0
+            if self.planner_state in (LOCAL_PLAN_INFEASIBLE, LOCAL_RECOVERY):
+                self.recovery_planner.on_success()
+                self.planner_state = PLANNER_NORMAL
+                self.planner_failure_reason = ""
+                self.recovery_vx_scale = 1.0
+            if self.last_execution_corridor is not None:
+                self.last_execution_corridor.metadata["planner_state"] = self.planner_state
         self.policy.note_cmd_w(now, res.w)
         self.tick_phase(now, res.vx)
 
