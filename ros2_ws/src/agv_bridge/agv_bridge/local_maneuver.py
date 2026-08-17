@@ -142,8 +142,14 @@ class LocalManeuverCandidate:
 
 
 def _footprint_points(x: float, y: float, yaw: float, geom=DEFAULT_GEOM) -> List[Pt]:
-    """Body samples along length/width (AMB-150) — matches Safety intent without over-rejecting arcs."""
-    hl, hw = 0.45 * geom.length, 0.45 * geom.width
+    """Probe/rollout body samples — sizes from VehicleGeometry ONLY (no second table).
+
+    Uses the pre-P0-A 0.45 shrink set so Probe / Local / 3F recovery semantics
+    stay unchanged. Full rectangle polygon truth lives in nav_footprint
+    (swept corridor / trajectory_collision / rotation sweep). Wiring Probe to
+    full-polygon narrow-phase is deferred (P0-C/E) — not this phase.
+    """
+    hl, hw = 0.45 * float(geom.length), 0.45 * float(geom.width)
     local = [
         (hl, 0.0),
         (-hl, 0.0),

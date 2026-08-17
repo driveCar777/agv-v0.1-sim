@@ -78,6 +78,10 @@ def patch_mock_state(state) -> None:
     state._last_global_replan = 0.0
     state._local_replan_count = 0
     state._global_replan_count = 0
+    state._global_path_revision = 0
+    state._global_reference: Dict[str, Any] = {}
+    state._local_candidates_layer: Dict[str, Any] = {}
+    state._selected_local: Dict[str, Any] = {}
     state._stuck_since = 0.0
     state._last_progress_dist = None
     state._track_mode = "forward"
@@ -107,6 +111,11 @@ def patch_mock_state(state) -> None:
     sx, sy, syaw = world.spawn_pose()
     with state.lock:
         state.x, state.y, state.angle = sx, sy, syaw
+
+    def _bump_global_revision() -> int:
+        n = int(getattr(state, "_global_path_revision", 0) or 0) + 1
+        state._global_path_revision = n
+        return n
 
     def _clear_progress_and_recovery() -> None:
         progress.reset()
@@ -165,6 +174,7 @@ def patch_mock_state(state) -> None:
             state._planned_path = []
             state._global_path = []
             state._raw_global_path = []
+            _bump_global_revision()
             state._planning_metrics = {}
             state._path_candidates = []
             state._best_confidence = 0.0
@@ -317,6 +327,7 @@ def patch_mock_state(state) -> None:
         with state.lock:
             state._global_path = gpath
             state._raw_global_path = list(global_planner.last_raw_path)
+            _bump_global_revision()
             state._planning_metrics = dict(global_planner.last_metrics)
             state._planned_path = list(res.best_path)
             state._path = list(res.best_path)
@@ -391,6 +402,7 @@ def patch_mock_state(state) -> None:
         with state.lock:
             state._raw_global_path = list(primary.raw_path)
             state._global_path = list(primary.path)
+            _bump_global_revision()
             state._planning_metrics = primary.metrics.to_dict()
             state._planned_path = []
             state._path = []
@@ -446,6 +458,7 @@ def patch_mock_state(state) -> None:
             state._planned_path = []
             state._global_path = []
             state._raw_global_path = []
+            _bump_global_revision()
             state._planning_metrics = {}
             state._path_candidates = []
             state._best_confidence = 0.0
@@ -521,6 +534,8 @@ def patch_mock_state(state) -> None:
             emergency = bool(state.emergency or state.soft_emc)
             path_progress_s = float(state._path_progress_s)
             goal_distance = float(state._goal_distance)
+            path_i = int(getattr(state, "_path_i", 0) or 0)
+            path_rev = int(getattr(state, "_global_path_revision", 0) or 0)
             stuck_s = float(state._stuck_s)
             recovery_attempts = int(state._recovery_attempts)
             global_n = int(state._global_replan_count)
@@ -708,6 +723,98 @@ def patch_mock_state(state) -> None:
         )
         if dbg.get("wall_approach") is not None:
             dbg["wall_approach"]["nearest_obstacle_point"] = obs_info.get("nearest_obstacle_point")
+        # P0-B: Global Reference Preview — AFTER control, read-only (never cmd_vel)
+        try:
+            from agv_bridge.nav_global_preview import (
+                build_global_reference,
+                collect_local_candidates,
+                expected_local_distance_m,
+                preview_enabled,
+            )
+
+            if preview_enabled():
+                gref = build_global_reference(
+                    path=gpath,
+                    x=x,
+                    y=y,
+                    yaw=yaw,
+                    path_progress_s=path_progress_s,
+                    path_index=path_i,
+                    goal_distance_m=goal_distance,
+                    path_revision=path_rev,
+                    goal_reached=str(nav_mode) == "arrived" or str(stop_reason) in ("GOAL_REACHED", "STOP_GOAL"),
+                )
+            else:
+                gref = {"status": "DISABLED", "preview_m": 0.0, "kinematic_valid": None, "controls_vehicle": False}
+            loc_layer = collect_local_candidates(
+                maneuver=maneuver,
+                path_candidates=cands,
+                selected=sel or maneuver.get("decision") or maneuver.get("mode"),
+            )
+            selected_local = {
+                "candidate_id": loc_layer.get("selected_candidate") or "NONE",
+                "source": "local_compare",
+            }
+            gvl = {
+                "global_preview_m": gref.get("preview_m"),
+                "global_remaining_m": gref.get("remaining_m"),
+                "global_preview_reason": gref.get("preview_reason"),
+                "global_path_revision": gref.get("path_revision"),
+                "local_candidate_count": loc_layer.get("count"),
+                "local_valid_count": loc_layer.get("valid_count"),
+                "local_max_distance_m": loc_layer.get("max_distance_m"),
+                "local_mean_distance_m": loc_layer.get("mean_distance_m"),
+                "selected_candidate": selected_local.get("candidate_id"),
+                "requested_vx": cmd_vx,
+                "safe_vx": safe_vx,
+                "state_vx": state_vx,
+                "expected_local_distance_m": round(
+                    expected_local_distance_m(state_vx=state_vx, requested_vx=cmd_vx), 3
+                ),
+            }
+            dbg["global_reference"] = gref
+            dbg["local_candidates"] = loc_layer
+            dbg["selected_local"] = selected_local
+            dbg["global_vs_local"] = gvl
+            with state.lock:
+                state._global_reference = gref
+                state._local_candidates_layer = loc_layer
+                state._selected_local = selected_local
+        except Exception:
+            pass
+        # P0-B-0: read-only observability ingest (must not affect control)
+        try:
+            from agv_bridge.nav_observability import OBS
+
+            t_obs0 = time.perf_counter()
+            obs_out = OBS.ingest_debug_snapshot(dbg)
+            overhead = (time.perf_counter() - t_obs0) * 1000.0
+            dbg["observability"] = {
+                "cycle_id": obs_out.get("cycle_id"),
+                "trace_id": obs_out.get("trace_id"),
+                "likely_owner": obs_out.get("likely_owner"),
+                "logging_overhead_ms": obs_out.get("logging_overhead_ms", round(overhead, 3)),
+                "summary": OBS.summary(),
+            }
+            # Attach decision slice for future UI without duplicating full dump every time
+            if isinstance(obs_out.get("decision"), dict):
+                dbg["nav_decision_trace"] = {
+                    "selection": obs_out["decision"].get("selection"),
+                    "command": obs_out["decision"].get("command"),
+                    "safety": obs_out["decision"].get("safety"),
+                    "diagnostics": obs_out["decision"].get("diagnostics"),
+                    "candidates": {
+                        "count": (obs_out["decision"].get("candidates") or {}).get("count"),
+                        "valid_count": (obs_out["decision"].get("candidates") or {}).get("valid_count"),
+                        "max_distance_m": (obs_out["decision"].get("candidates") or {}).get("max_distance_m"),
+                        "items": (obs_out["decision"].get("candidates") or {}).get("items"),
+                    },
+                    "fsm": obs_out["decision"].get("fsm"),
+                    "recovery": obs_out["decision"].get("recovery"),
+                    "performance": obs_out["decision"].get("performance"),
+                }
+        except Exception:
+            pass
         with state.lock:
             state._debug_snapshot = dbg
             state._nav_session_id = debug_hub.session_id
@@ -759,10 +866,106 @@ def patch_mock_state(state) -> None:
         debug_hub.last_capture = cap
         return {"success": True, "capture": cap, "timestamp": time.time()}
 
+    def get_nav_logs(query: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        from agv_bridge.nav_observability import OBS
+
+        q = dict(query or {})
+        return OBS.query_events(
+            level=q.get("level"),
+            category=q.get("category"),
+            event=q.get("event"),
+            source=q.get("source"),
+            component=q.get("component"),
+            trace_id=q.get("trace_id"),
+            cycle_id=q.get("cycle_id"),
+            from_ts=float(q["from_ts"]) if q.get("from_ts") not in (None, "") else None,
+            to_ts=float(q["to_ts"]) if q.get("to_ts") not in (None, "") else None,
+            since=q.get("since"),
+            focus=q.get("focus") or q.get("diagnostic_focus"),
+            limit=int(q.get("limit") or 200),
+            cursor=q.get("cursor"),
+            include_api=str(q.get("include_api") or "").lower() in ("1", "true", "yes"),
+        )
+
+    def get_nav_logs_summary() -> Dict[str, Any]:
+        from agv_bridge.nav_observability import OBS
+
+        return OBS.summary()
+
+    def get_nav_logs_trace(trace_id: str) -> Dict[str, Any]:
+        from agv_bridge.nav_observability import OBS
+
+        return OBS.get_trace(str(trace_id))
+
+    def get_nav_logs_cycle(cycle_id: str) -> Dict[str, Any]:
+        from agv_bridge.nav_observability import OBS
+
+        return OBS.get_cycle(str(cycle_id))
+
+    def get_nav_logs_diagnostics(window_s: float = 10.0) -> Dict[str, Any]:
+        from agv_bridge.nav_observability import OBS
+
+        return OBS.diagnostics_window(window_s=float(window_s or 10.0))
+
+    def get_nav_logs_events(query: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        return get_nav_logs(query)
+
+    def get_nav_api_logs(limit: int = 100) -> Dict[str, Any]:
+        from agv_bridge.nav_observability import OBS
+
+        with OBS._lock:
+            rows = list(OBS.api_events)[-max(1, min(int(limit or 100), 200)) :]
+        return {"success": True, "events": rows, "count": len(rows), "separated": True}
+
+    def configure_nav_logs(cfg: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        from agv_bridge.nav_observability import OBS
+
+        c = dict(cfg or {})
+        return {"success": True, **OBS.configure(
+            level=c.get("level"),
+            candidate_detail=c.get("candidate_detail"),
+            enabled=c.get("enabled"),
+            sample_hz=c.get("sample_hz"),
+        )}
+
+    def get_nav_preview() -> Dict[str, Any]:
+        """GET-only Global/Local preview. Never a control API."""
+        with state.lock:
+            gref = dict(getattr(state, "_global_reference", {}) or {})
+            loc = dict(getattr(state, "_local_candidates_layer", {}) or {})
+            sel = dict(getattr(state, "_selected_local", {}) or {})
+            gvl = (state._debug_snapshot or {}).get("global_vs_local") if isinstance(state._debug_snapshot, dict) else {}
+        if not gref:
+            _refresh_debug_snapshot(time.time())
+            with state.lock:
+                gref = dict(getattr(state, "_global_reference", {}) or {})
+                loc = dict(getattr(state, "_local_candidates_layer", {}) or {})
+                sel = dict(getattr(state, "_selected_local", {}) or {})
+                gvl = (state._debug_snapshot or {}).get("global_vs_local") if isinstance(state._debug_snapshot, dict) else {}
+        return {
+            "success": True,
+            "global_reference": gref,
+            "local_candidates": loc,
+            "selected_local": sel,
+            "global_vs_local": gvl or {},
+            "geometry_version": "p0a",
+            "generated_at": time.time(),
+            "controls_vehicle": False,
+        }
+
     state.get_nav_debug = get_nav_debug
     state.set_debug_level = set_debug_level
     state.set_debug_freeze = set_debug_freeze
     state.capture_debug = capture_debug
+    state.get_nav_logs = get_nav_logs
+    state.get_nav_logs_summary = get_nav_logs_summary
+    state.get_nav_logs_trace = get_nav_logs_trace
+    state.get_nav_logs_cycle = get_nav_logs_cycle
+    state.get_nav_logs_diagnostics = get_nav_logs_diagnostics
+    state.get_nav_logs_events = get_nav_logs_events
+    state.get_nav_api_logs = get_nav_api_logs
+    state.configure_nav_logs = configure_nav_logs
+    state.get_nav_preview = get_nav_preview
     state._refresh_debug_snapshot = _refresh_debug_snapshot
     def _physics_loop() -> None:
         dt = 0.05
@@ -906,6 +1109,7 @@ def patch_mock_state(state) -> None:
                         progress.reset()
                         with state.lock:
                             state._global_path = new_g
+                            _bump_global_revision()
                             state._raw_global_path = list(getattr(world, "_last_raw_path", []) or [])
                             state._planning_metrics = dict(getattr(world, "_last_plan_metrics", {}) or {})
                             state._global_replan_count = int(state._global_replan_count) + 1
@@ -1227,6 +1431,7 @@ def patch_mock_state(state) -> None:
                         state._planned_path = []
                         state._global_path = []
                         state._raw_global_path = []
+                        _bump_global_revision()
                         state._planning_metrics = {}
                         state._path_candidates = []
                         state._best_confidence = 0.0

@@ -1,30 +1,44 @@
 """统一车辆几何 / 碰撞 / 安全阈值（Web 仿真）。
 
+P0-A: VehicleGeometry is the ONLY size truth source.
+  - footprint polygon (nav_footprint) = narrow-phase TRUTH
+  - planner_radius / local_radius / safety_radius = BROAD-PHASE approximation only
+
 差异必须来自此配置，禁止再散落魔法数字。
 """
 
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 
 @dataclass(frozen=True)
 class VehicleGeometry:
-    """AMB-150 近似。
+    """AMB-150 近似（复用既有尺寸，不另起第二套常量）。
 
-    - planner_radius：A* 膨胀栅格上的圆足迹
-    - local_radius：局部 MPPI 碰撞圆（略小于 planner，避免双重过保守）
-    - safety_radius：物理层机身碰撞守卫
+    Body frame: +x front, +y left (see PHASE4_NAVIGATION_KINEMATIC_CONTRACT.md).
+
+    Broad-phase (approximation — early reject only):
+      planner_radius, local_radius, safety_radius
+
+    Narrow-phase truth:
+      length / width / bumper_l → footprint polygon via nav_footprint
     """
 
     length: float = 1.05
     width: float = 0.55
-    bumper_l: float = 0.55  # 中心到头/尾
+    bumper_l: float = 0.55  # center → front/rear (overhang); also front_overhang_m / rear_overhang_m
+    # Broad-phase bounding circles (NOT final collision truth)
     planner_radius: float = 0.25
     local_radius: float = 0.24
     safety_radius: float = 0.28
-    # Safety Supervisor（最终裁决）
+    # Optional physical params — do NOT invent if unknown
+    center_offset_x_m: float = 0.0
+    safety_margin_m: float = 0.08
+    track_width_m: Optional[float] = None  # UNAVAILABLE
+    wheelbase_m: Optional[float] = None  # UNAVAILABLE
+    # Safety Supervisor（最终裁决阈值 — 行为层；P0-A 不改数值）
     front_stop_m: float = 0.70
     front_clear_m: float = 1.20
     rear_stop_m: float = 0.55
@@ -36,11 +50,45 @@ class VehicleGeometry:
     acc_v: float = 0.9
     acc_w: float = 0.55
 
+    # --- aliases for contract / telemetry (no second size table) ---
+    @property
+    def length_m(self) -> float:
+        return float(self.length)
+
+    @property
+    def width_m(self) -> float:
+        return float(self.width)
+
+    @property
+    def front_overhang_m(self) -> float:
+        return float(self.bumper_l)
+
+    @property
+    def rear_overhang_m(self) -> float:
+        return float(self.bumper_l)
+
     def to_dict(self) -> Dict[str, Any]:
-        return asdict(self)
+        d = asdict(self)
+        d["length_m"] = self.length_m
+        d["width_m"] = self.width_m
+        d["front_overhang_m"] = self.front_overhang_m
+        d["rear_overhang_m"] = self.rear_overhang_m
+        d["footprint_model"] = "polygon"
+        d["collision_model_broad_phase"] = "bounding_radius"
+        d["collision_model_narrow_phase"] = "footprint_polygon_samples"
+        d["track_width_unavailable"] = self.track_width_m is None
+        d["wheelbase_unavailable"] = self.wheelbase_m is None
+        d["radius_role"] = "approximation_broad_phase_only"
+        return d
 
 
 DEFAULT_GEOM = VehicleGeometry()
+
+
+def get_vehicle_geometry() -> VehicleGeometry:
+    """Canonical accessor — same instance as DEFAULT_GEOM."""
+    return DEFAULT_GEOM
+
 
 # Stuck / Recovery（dt=0.05、局部 0.35s、巡航~0.15m/s）
 # 8s 内沿路径至少前进 0.30m；否则视为无进展

@@ -7,7 +7,7 @@
 <script src="https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.min.js"></script>
 <script src="component_system.js?v=20260816m2"></script>
 <script src="nav_ui.js?v=20260816p1"></script>
-<script src="sim3d.js?v=20260816m2"></script>
+<script src="sim3d.js?v=20260817p0b"></script>
 <style>
   :root {
     --bg: #f4f6f9;
@@ -82,6 +82,16 @@
     border-radius: 16px; box-shadow: 0 20px 50px rgba(15,23,42,0.18); text-align: center;
   }
   #onboardPrompt.open { display: block; }
+
+  #mapLegend {
+    position: absolute; left: 12px; bottom: 42px; z-index: 12;
+    display: flex; flex-wrap: wrap; gap: 8px 12px;
+    padding: 6px 10px; border-radius: 8px;
+    background: rgba(255,255,255,0.88); border: 1px solid var(--line);
+    font-size: 11px; color: var(--muted); pointer-events: none;
+  }
+  #mapLegend span { display: inline-flex; align-items: center; gap: 5px; }
+  #mapLegend i { display: inline-block; width: 14px; height: 3px; border-radius: 1px; }
   #onboardPrompt h3 { margin: 0 0 8px; font-size: 18px; }
   #onboardPrompt p { margin: 0 0 16px; color: var(--muted); font-size: 13px; line-height: 1.5; }
   #onboardPrompt .actions { display: flex; gap: 10px; justify-content: center; }
@@ -264,13 +274,19 @@
     </div>
     <div id="onboardPrompt">
       <h3>车上提示 · 开始导航</h3>
-      <p id="onboardText">路径已规划完成。确认后车辆将循局部蓝色引导带启程。</p>
+      <p id="onboardText">路径已规划。主图长灰线 = Global Reference（仅参考）；短蓝带 = Selected Local。确认后启程。</p>
       <div class="actions">
         <button class="btn" id="btnPromptCancel" type="button">取消</button>
         <button class="btn btn-primary" id="btnPromptGo" type="button">开始</button>
       </div>
     </div>
     <div id="widgetLayer"></div>
+    <div id="mapLegend" aria-hidden="true">
+      <span><i style="background:#64748b"></i>Global Reference</span>
+      <span><i style="background:#38bdf8"></i>Local Candidate</span>
+      <span><i style="background:#2563eb;height:4px"></i>Selected Local</span>
+      <span><i style="background:#0f172a;width:8px;height:8px;border-radius:2px"></i>Vehicle Footprint</span>
+    </div>
     <div class="hint-bar" id="camHint">跟随：对齐车头正后 · 左键左右拖改视角 · 滚轮逆时针贴近 / 顺时针俯视</div>
   </div>
 </div>
@@ -359,7 +375,17 @@
     const nav = snap.nav || {};
     const scene = snap.scene || {};
     view.setPose(agv.x || 0, agv.y || 0, agv.angle || 0);
-    // STEP 3F-CORRECTIVE: Main map ACTIVE physical corridor (nav snapshot + debug)
+    // P0-B LAYER 1: Global Reference Preview (long, translucent, REFERENCE_ONLY)
+    const gref = nav.global_reference || (snap.debug && snap.debug.global_reference) || null;
+    if (typeof view.setGlobalReference === 'function') {
+      view.setGlobalReference(gref);
+    }
+    // P0-B LAYER 2/3: all Local Candidates (+ selected highlight)
+    const locLayer = nav.local_candidates || (snap.debug && snap.debug.local_candidates) || null;
+    if (typeof view.setLocalCandidates === 'function') {
+      view.setLocalCandidates(locLayer);
+    }
+    // LAYER: Selected Local Physical Trajectory (short blue band) — unchanged semantics
     const dbg0 = snap.debug || {};
     const navPt = nav.physical_trajectory || null;
     const dbgPt =
@@ -374,7 +400,7 @@
       const src = String(traj.source || "").toUpperCase();
       let bandColor = '#3B82F6';
       if (src.includes('RETREAT') || src.includes('BACKWARD') || src.includes('REVERSE')) {
-        bandColor = '#38BDF8'; // recovery / rearward cyan-blue
+        bandColor = '#38BDF8';
       }
       view.setGuideBand(poses, bandColor, {
         status: traj.status,
@@ -411,7 +437,10 @@
     $('#hdrMeta').textContent =
       `${scene.kind || ''} · ${snap.laser?.label || ''} · ${nav.mode || 'idle'}` +
       (nav.confidence != null && nav.mode !== 'idle'
-        ? ` · 蓝带${Math.round((nav.confidence || 0) * 100)}% · 候选${(nav.candidates || []).length}`
+        ? ` · 选中局${Math.round((nav.confidence || 0) * 100)}% · 局候${(nav.local_candidates && nav.local_candidates.count) || (nav.candidates || []).length}`
+        : '') +
+      (nav.global_reference && nav.global_reference.preview_m != null
+        ? ` · G预览${Number(nav.global_reference.preview_m).toFixed(1)}m`
         : '') +
       (nav.stop_reason && nav.stop_reason !== 'NONE' ? ` · ${nav.stop_reason}` : '') +
       (nav.stuck_s > 0.5 ? ` · stuck${Number(nav.stuck_s).toFixed(0)}s` : '') +
@@ -906,8 +935,12 @@
         <div>vx <b>${vx.toFixed(2)}</b> ${vx < -0.02 ? '· 倒车' : ''}</div>
         <div>电池 <b>${a.battery ?? '—'}%</b></div>
         <div>导航 <b>${n.mode || 'idle'}${n.pending_confirm ? ' · 待确认' : ''}</b></div>
-        <div>蓝带置信 <b>${n.confidence != null ? Math.round(n.confidence * 100) + '%' : '—'}</b></div>
-        <div>候选 <b>${(n.candidates || []).length}</b> · 局重 ${n.local_replan_count || 0}</div>`;
+        <div>Global预览 <b>${n.global_reference && n.global_reference.preview_m != null ? Number(n.global_reference.preview_m).toFixed(1) + 'm' : '—'}</b>
+          <span style="color:var(--muted);font-size:10px"> REFERENCE</span></div>
+        <div>Local候选 <b>${(n.local_candidates && n.local_candidates.count) || (n.candidates || []).length || 0}</b>
+          · max ${(n.local_candidates && n.local_candidates.max_distance_m != null) ? Number(n.local_candidates.max_distance_m).toFixed(2) + 'm' : '—'}</div>
+        <div>选中局轨 <b>${(n.selected_local && n.selected_local.candidate_id) || '—'}</b></div>
+        <div>局重 <b>${n.local_replan_count || 0}</b> · 路修订 <b>${n.global_path_revision || 0}</b></div>`;
     };
   }
 

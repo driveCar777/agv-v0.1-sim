@@ -142,6 +142,10 @@ class SimApp:
             path_lateral = float(getattr(self.state, "_path_lateral_m", 0.0) or 0.0)
             path_heading = float(getattr(self.state, "_path_heading_err", 0.0) or 0.0)
             physical_corridor = dict(getattr(self.state, "_physical_corridor", {}) or {})
+            global_reference = dict(getattr(self.state, "_global_reference", {}) or {})
+            local_cands_layer = dict(getattr(self.state, "_local_candidates_layer", {}) or {})
+            selected_local = dict(getattr(self.state, "_selected_local", {}) or {})
+            path_rev = int(getattr(self.state, "_global_path_revision", 0) or 0)
         navigating = nav_mode in ("tracking", "avoid", "planned", "planner_debug")
         # 未导航：车周静态点云；导航中：实时雷达点云为主
         if navigating and nav_mode != "planner_debug":
@@ -251,8 +255,25 @@ class SimApp:
                 "planning": planning_metrics,
                 "path_lateral_error": round(path_lateral, 4),
                 "path_heading_error": round(path_heading, 4),
-                "blue_band_means": "active physical trajectory corridor (Probe/Recovery SoT)",
+                "blue_band_means": "SELECTED local physical trajectory (short horizon); see global_reference for 2-8m map preview",
                 "physical_trajectory": physical_corridor or None,
+                "global_reference": self._preview_summary(global_reference),
+                "local_candidates": {
+                    "count": local_cands_layer.get("count"),
+                    "valid_count": local_cands_layer.get("valid_count"),
+                    "max_distance_m": local_cands_layer.get("max_distance_m"),
+                    "mean_distance_m": local_cands_layer.get("mean_distance_m"),
+                    "items": (local_cands_layer.get("items") or [])[:12],
+                }
+                if local_cands_layer
+                else {"count": 0, "items": []},
+                "selected_local": selected_local or None,
+                "global_path_revision": path_rev,
+                "safety_envelope": {
+                    "front_near": round(front_near, 3),
+                    "rear_near": round(rear_near, 3),
+                    "stop_reason": stop_reason,
+                },
             },
             "debug": debug_blob,
             "safety": {
@@ -281,6 +302,40 @@ class SimApp:
 
     def _stations(self) -> list:
         return self.world.pois()
+
+    @staticmethod
+    def _preview_summary(gref: Dict[str, Any]) -> Dict[str, Any]:
+        """Compact /api/state field. Full poses via GET /api/nav/preview."""
+        if not gref:
+            return {"status": "NO_GLOBAL_PATH", "preview_m": 0.0, "kinematic_valid": None}
+        poses = gref.get("poses") or gref.get("centerline") or []
+        # Keep a thinned centerline in /api/state so the main map can draw Global Reference
+        # without requiring a second fetch. Cap to ~80 points.
+        thin = poses
+        if len(poses) > 80:
+            step = max(1, len(poses) // 80)
+            thin = poses[::step]
+            if thin[-1] is not poses[-1]:
+                thin = list(thin) + [poses[-1]]
+        return {
+            "status": gref.get("status"),
+            "geometry_status": gref.get("geometry_status") or "REFERENCE_ONLY",
+            "preview_m": gref.get("preview_m"),
+            "remaining_m": gref.get("remaining_m"),
+            "preview_reason": gref.get("preview_reason"),
+            "preview_point_count": gref.get("preview_point_count"),
+            "first_turn_distance_m": gref.get("first_turn_distance_m"),
+            "heading_change_deg": gref.get("heading_change_deg"),
+            "kinematic_valid": None,
+            "path_revision": gref.get("path_revision"),
+            "path_exists": gref.get("path_exists"),
+            "path_length_m": gref.get("path_length_m"),
+            "poses": thin,
+            "left_edge": (gref.get("left_edge") or [])[:80],
+            "right_edge": (gref.get("right_edge") or [])[:80],
+            "note": gref.get("note") or "REFERENCE_ONLY / unvalidated",
+            "controls_vehicle": False,
+        }
 
     @staticmethod
     def _local_path(path: list, x: float, y: float, horizon_m: float = 5.0) -> list:
@@ -397,6 +452,28 @@ def make_handler(www: Path):
             self.send_header("Access-Control-Allow-Origin", "*")
             self.end_headers()
             self.wfile.write(raw)
+            # P0-B-0: sampled API access log (no /api/state body dump)
+            try:
+                from agv_bridge.nav_observability import OBS
+
+                t0 = getattr(self, "_req_t0", None)
+                dur = (time.time() - t0) * 1000.0 if t0 else 0.0
+                OBS.log_api_access(
+                    method=str(getattr(self, "_req_method", "GET")),
+                    path=str(getattr(self, "_req_path", "") or ""),
+                    status=int(code),
+                    duration_ms=dur,
+                    client=str(getattr(self, "client_address", ("",))[0] or ""),
+                    response_size=len(raw),
+                    error=None if code < 400 else str((obj or {}).get("message") or code),
+                )
+            except Exception:
+                pass
+
+        def _begin_req(self, method: str) -> None:
+            self._req_t0 = time.time()
+            self._req_method = method
+            self._req_path = urlparse(self.path).path
 
         def _read_json(self) -> Dict[str, Any]:
             n = int(self.headers.get("Content-Length") or 0)
@@ -415,7 +492,9 @@ def make_handler(www: Path):
             self.end_headers()
 
         def do_GET(self) -> None:  # noqa: N802
+            self._begin_req("GET")
             path = urlparse(self.path).path
+            qs = parse_qs(urlparse(self.path).query)
             assert APP is not None
             if path in ("/", "/index.html"):
                 # 新主界面
@@ -453,7 +532,7 @@ def make_handler(www: Path):
                 self._json(200, {"scenes": APP.world.list_scenes(), "current": APP.world.scene_info()})
                 return
             if path == "/api/pois":
-                q = parse_qs(urlparse(self.path).query).get("q", [""])[0]
+                q = qs.get("q", [""])[0]
                 pois = APP.world.pois()
                 if q:
                     ql = q.lower()
@@ -472,12 +551,66 @@ def make_handler(www: Path):
                 else:
                     self._json(200, {"success": False, "message": "debug unsupported"})
                 return
+            if path in ("/api/nav/preview", "/api/preview"):
+                if hasattr(APP.state, "get_nav_preview"):
+                    self._json(200, APP.state.get_nav_preview())
+                else:
+                    self._json(200, {"success": False, "message": "preview unsupported"})
+                return
+            # P0-B-0 observability APIs
+            if path in ("/api/logs", "/api/nav/logs", "/api/logs/events", "/api/nav/logs/events"):
+                if hasattr(APP.state, "get_nav_logs"):
+                    query = {k: (v[0] if isinstance(v, list) and v else v) for k, v in qs.items()}
+                    self._json(200, APP.state.get_nav_logs(query))
+                else:
+                    self._json(200, {"success": False, "message": "logs unsupported"})
+                return
+            if path in ("/api/logs/summary", "/api/nav/logs/summary"):
+                self._json(200, APP.state.get_nav_logs_summary() if hasattr(APP.state, "get_nav_logs_summary") else {"success": False})
+                return
+            if path in ("/api/logs/diagnostics", "/api/nav/logs/diagnostics"):
+                win = float(qs.get("window_s", ["10"])[0] or 10)
+                self._json(
+                    200,
+                    APP.state.get_nav_logs_diagnostics(win)
+                    if hasattr(APP.state, "get_nav_logs_diagnostics")
+                    else {"success": False},
+                )
+                return
+            if path in ("/api/logs/api", "/api/nav/logs/api"):
+                lim = int(qs.get("limit", ["100"])[0] or 100)
+                self._json(
+                    200,
+                    APP.state.get_nav_api_logs(lim) if hasattr(APP.state, "get_nav_api_logs") else {"success": False},
+                )
+                return
+            if path.startswith("/api/logs/trace/") or path.startswith("/api/nav/logs/trace/"):
+                tid = path.rsplit("/", 1)[-1]
+                self._json(
+                    200,
+                    APP.state.get_nav_logs_trace(tid) if hasattr(APP.state, "get_nav_logs_trace") else {"success": False},
+                )
+                return
+            if path.startswith("/api/logs/cycle/") or path.startswith("/api/nav/logs/cycle/"):
+                cid = path.rsplit("/", 1)[-1]
+                self._json(
+                    200,
+                    APP.state.get_nav_logs_cycle(cid) if hasattr(APP.state, "get_nav_logs_cycle") else {"success": False},
+                )
+                return
             return super().do_GET()
 
         def do_POST(self) -> None:  # noqa: N802
+            self._begin_req("POST")
             path = urlparse(self.path).path
             body = self._read_json()
             assert APP is not None
+            if path in ("/api/logs/config", "/api/nav/logs/config"):
+                self._json(
+                    200,
+                    APP.state.configure_nav_logs(body) if hasattr(APP.state, "configure_nav_logs") else {"success": False},
+                )
+                return
             if path in ("/api/goal", "/api/navigate_xy", "/api/nav/plan"):
                 if body.get("poi_id") or body.get("target_id"):
                     self._json(200, APP.navigate_poi(str(body.get("poi_id") or body.get("target_id"))))

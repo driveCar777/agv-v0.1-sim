@@ -462,8 +462,90 @@
         depthWrite: false,
       });
       this.band = new THREE.Mesh(geo, mat);
-      this.band.renderOrder = 1;
+      this.band.renderOrder = 2; // selected local above global reference
       this.scene.add(this.band);
+    }
+
+    _clearLayerGroup(name) {
+      const g = this[name];
+      if (!g) return;
+      while (g.children.length) {
+        const c = g.children.pop();
+        c.geometry?.dispose?.();
+        if (c.material) {
+          if (Array.isArray(c.material)) c.material.forEach((m) => m.dispose?.());
+          else c.material.dispose?.();
+        }
+      }
+    }
+
+    _ensureLayerGroup(name) {
+      if (!this[name]) {
+        this[name] = new THREE.Group();
+        this[name].name = name;
+        this.scene.add(this[name]);
+      }
+      this._clearLayerGroup(name);
+      return this[name];
+    }
+
+    _addLineTo(group, pts, color, y, opacity) {
+      if (!pts || pts.length < 2) return;
+      const arr = [];
+      for (const p of pts) arr.push(p.x, y, -p.y);
+      const geo = new THREE.BufferGeometry();
+      geo.setAttribute("position", new THREE.Float32BufferAttribute(arr, 3));
+      const mat = new THREE.LineBasicMaterial({
+        color,
+        transparent: true,
+        opacity: opacity != null ? opacity : 0.85,
+        depthWrite: false,
+      });
+      const line = new THREE.Line(geo, mat);
+      group.add(line);
+    }
+
+    /** P0-B LAYER 1: long Global Reference Preview (REFERENCE_ONLY, translucent). */
+    setGlobalReference(gref) {
+      const group = this._ensureLayerGroup("_globalRefGroup");
+      if (!gref || !gref.poses || gref.poses.length < 2) return;
+      const status = String(gref.status || "").toUpperCase();
+      if (status === "GOAL_REACHED" || status === "NO_GLOBAL_PATH" || status === "DISABLED") return;
+      // Translucent slate — clearly not "certified safe"
+      this._addLineTo(group, gref.poses, 0x64748b, 0.06, 0.45);
+      if (gref.left_edge && gref.right_edge && gref.left_edge.length >= 2) {
+        this._addLineTo(group, gref.left_edge, 0x94a3b8, 0.05, 0.28);
+        this._addLineTo(group, gref.right_edge, 0x94a3b8, 0.05, 0.28);
+      }
+      group.renderOrder = 0;
+    }
+
+    /** P0-B LAYER 2/3: all local candidates + highlighted selected. */
+    setLocalCandidates(layer) {
+      const group = this._ensureLayerGroup("_localCandGroup");
+      const items = (layer && layer.items) || [];
+      items.forEach((c) => {
+        const poses = c.poses || c.path || [];
+        if (!poses || poses.length < 2) return;
+        const selected = !!c.selected;
+        const valid = c.valid !== false;
+        let col = 0x94a3b8;
+        let op = 0.55;
+        let y = 0.11;
+        if (selected) {
+          col = 0x2563eb;
+          op = 0.95;
+          y = 0.14;
+        } else if (valid) {
+          col = 0x38bdf8;
+          op = 0.7;
+        } else {
+          col = 0xf87171;
+          op = 0.4;
+        }
+        this._addLineTo(group, poses, col, y, op);
+      });
+      group.renderOrder = 1;
     }
 
     _ensureDebugGroup() {

@@ -625,6 +625,13 @@ def build_phase4_telemetry(
     if isinstance(obs_snap, dict) and obs_snap.get("skew_ms") is not None and skew is None:
         skew = obs_snap.get("skew_ms")
 
+    try:
+        from agv_bridge.nav_footprint import geometry_telemetry
+
+        vehicle_geometry = geometry_telemetry()
+    except Exception:
+        vehicle_geometry = {"implemented": False}
+
     return {
         "schema_version": "phase4_step3f_v1",
         "trace_id": (tracker.trace_id if tracker else None) or session_id,
@@ -643,6 +650,7 @@ def build_phase4_telemetry(
         "progress": progress_block,
         "recovery": recovery_block,
         "physical_trajectory": physical_trajectory,
+        "vehicle_geometry": vehicle_geometry,
         "breadcrumb": breadcrumb_block,
         "replan": replan_block,
         "oscillation": oscillation_block,

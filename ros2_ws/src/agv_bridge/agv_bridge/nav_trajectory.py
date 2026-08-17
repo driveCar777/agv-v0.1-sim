@@ -1,10 +1,10 @@
-"""Physical Trajectory Corridor — STEP 3F shared geometry.
+"""Physical Trajectory Corridor — shared geometry for Local Physical Trajectory.
 
-ONE SOURCE OF TRUTH for:
-  rollout poses → ProbeResult → Blue Band → Recovery evidence
+P0-A: Local corridor edges/swept_polygon come from VehicleGeometry footprint
+swept sampling (nav_footprint), NOT centerline ± half_width as final truth.
 
 Does NOT invent a second integrator. Consumes poses from rollout_candidate /
-Probe reverse samples. Footprint = DEFAULT_GEOM + _footprint_points.
+Probe reverse samples. Global Reference Corridor is P0-B (not here).
 """
 
 from __future__ import annotations
@@ -13,12 +13,17 @@ import math
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
-from agv_bridge.local_maneuver import _footprint_points
+from agv_bridge.nav_footprint import (
+    SWEPT_ANGULAR_STEP_RAD,
+    SWEPT_SPATIAL_STEP_M,
+    footprint_points,
+    geometry_telemetry,
+    swept_boundary_edges,
+)
 from agv_bridge.nav_geometry import DEFAULT_GEOM, VehicleGeometry
 
 Pt = Tuple[float, float]
 
-# Local status vocabulary (avoid import cycle with nav_probe)
 STATUS_VALID = "VALID"
 STATUS_INVALID = "INVALID"
 STATUS_UNKNOWN = "UNKNOWN"
@@ -54,12 +59,20 @@ class TrajectorySample:
         }
 
 
-def corridor_inflate_m(geom: VehicleGeometry = DEFAULT_GEOM, *, safety: float = 0.08, loc: float = 0.05, ctrl: float = 0.05) -> float:
-    """Half-width inflate beyond geometric half-width (NOT a free UI fudge)."""
-    return float(safety + loc + ctrl)
+def corridor_inflate_m(
+    geom: VehicleGeometry = DEFAULT_GEOM,
+    *,
+    safety: float = 0.08,
+    loc: float = 0.05,
+    ctrl: float = 0.05,
+) -> float:
+    """Margin beyond geometric body (NOT a free UI fudge). Prefer geom.safety_margin_m."""
+    base = float(getattr(geom, "safety_margin_m", None) or safety)
+    return float(base + loc + ctrl)
 
 
 def footprint_half_width(geom: VehicleGeometry = DEFAULT_GEOM, *, inflate: Optional[float] = None) -> float:
+    """Diagnostic lateral half-width (legacy UI). Not swept-volume truth."""
     inf = corridor_inflate_m(geom) if inflate is None else float(inflate)
     return 0.5 * float(geom.width) + inf
 
@@ -72,10 +85,6 @@ def poses_from_rollout_path(
     w: float = 0.0,
     dt: float = 0.1,
 ) -> List[TrajectorySample]:
-    """Convert rollout path points (with optional yaw) into TrajectorySample list.
-
-    If yaw missing, integrate w*dt from yaw0 (same kinematics as rollout).
-    """
     out: List[TrajectorySample] = []
     yaw = float(yaw0)
     for i, p in enumerate(path or []):
@@ -111,7 +120,7 @@ def poses_from_xy_yaw(
 
 @dataclass
 class PhysicalTrajectoryCorridor:
-    """Swept-footprint physical corridor from differential-drive poses."""
+    """Local Physical Trajectory swept corridor (footprint⊕margin). Not Global Ref (P0-B)."""
 
     source: str
     poses: List[TrajectorySample] = field(default_factory=list)
@@ -122,17 +131,15 @@ class PhysicalTrajectoryCorridor:
     length_m: float = 0.0
     duration_s: float = 0.0
     half_width_m: float = 0.0
-    # Display: left/right boundary polylines (from footprint+margin at each pose)
     left_edge: List[Pt] = field(default_factory=list)
     right_edge: List[Pt] = field(default_factory=list)
-    # Simplified closed polygon for UI (left forward + right reverse)
     swept_polygon: List[Pt] = field(default_factory=list)
-    # Sparse centerline for lightweight clients
     centerline: List[Pt] = field(default_factory=list)
     failure_reason: str = "NONE"
-    risk: str = "NONE"  # NONE / SOFT / HARD
+    risk: str = "NONE"
     progress: Optional[float] = None
     valid: bool = False
+    geometry_model: str = "swept_footprint_polygon"
 
     def to_dict(self, *, max_poses: int = 24, max_poly: int = 48) -> Dict[str, Any]:
         poses = self.poses
@@ -158,12 +165,15 @@ class PhysicalTrajectoryCorridor:
             "failure_reason": self.failure_reason,
             "risk": self.risk,
             "progress": self.progress,
+            "geometry_model": self.geometry_model,
+            "swept_sampling_spatial_m": SWEPT_SPATIAL_STEP_M,
+            "swept_sampling_angular_deg": round(math.degrees(SWEPT_ANGULAR_STEP_RAD), 2),
             "poses": [p.to_dict() for p in poses],
             "centerline": [{"x": round(a, 3), "y": round(b, 3)} for a, b in self.centerline[:max_poses]],
             "swept_polygon": [{"x": round(a, 3), "y": round(b, 3)} for a, b in poly],
             "left_edge": [{"x": round(a, 3), "y": round(b, 3)} for a, b in self.left_edge[:max_poses]],
             "right_edge": [{"x": round(a, 3), "y": round(b, 3)} for a, b in self.right_edge[:max_poses]],
-            "note": "Swept footprint⊕margin; same poses as Probe when attached",
+            "note": "Local Physical Trajectory: footprint swept⊕margin (not centerline ribbon truth)",
         }
 
 
@@ -180,24 +190,28 @@ def build_corridor_from_poses(
     geom: VehicleGeometry = DEFAULT_GEOM,
     inflate: Optional[float] = None,
 ) -> PhysicalTrajectoryCorridor:
-    """Build physical corridor from already-integrated poses (no new rollout)."""
-    hw = footprint_half_width(geom, inflate=inflate)
-    left: List[Pt] = []
-    right: List[Pt] = []
+    """Build Local Physical Trajectory corridor via footprint swept edges."""
+    margin = corridor_inflate_m(geom) if inflate is None else float(inflate)
+    hw = footprint_half_width(geom, inflate=margin)
     center: List[Pt] = []
     length = 0.0
     prev: Optional[TrajectorySample] = None
     for p in poses:
-        c, s = math.cos(p.yaw), math.sin(p.yaw)
-        # Lateral unit (left = +90°)
-        lx, ly = -s, c
-        left.append((p.x + lx * hw, p.y + ly * hw))
-        right.append((p.x - lx * hw, p.y - ly * hw))
         center.append((p.x, p.y))
         if prev is not None:
             length += math.hypot(p.x - prev.x, p.y - prev.y)
         prev = p
-    poly: List[Pt] = list(left) + list(reversed(right))
+    if len(poses) >= 1:
+        left, right, poly = swept_boundary_edges(poses, geom, margin_m=margin)
+    else:
+        left, right, poly = [], [], []
+    if len(left) < 2 and len(poses) >= 2:
+        for p in poses:
+            c, s = math.cos(p.yaw), math.sin(p.yaw)
+            lx, ly = -s, c
+            left.append((p.x + lx * hw, p.y + ly * hw))
+            right.append((p.x - lx * hw, p.y - ly * hw))
+        poly = list(left) + list(reversed(right))
     duration = float(poses[-1].t - poses[0].t) if len(poses) >= 2 else 0.0
     valid = status == STATUS_VALID and not collision
     risk = "HARD" if collision or status == STATUS_INVALID else ("SOFT" if soft_risk else "NONE")
@@ -219,11 +233,13 @@ def build_corridor_from_poses(
         risk=risk,
         progress=progress,
         valid=valid,
+        geometry_model="swept_footprint_polygon",
     )
 
 
-def corridor_from_probe_result(pr: Any, *, yaw0: float, vx: float = 0.0, w: float = 0.0) -> Optional[PhysicalTrajectoryCorridor]:
-    """Attach corridor if ProbeResult already carries poses; else None (caller must not re-roll)."""
+def corridor_from_probe_result(
+    pr: Any, *, yaw0: float, vx: float = 0.0, w: float = 0.0
+) -> Optional[PhysicalTrajectoryCorridor]:
     poses = getattr(pr, "poses", None)
     if not poses:
         path = getattr(pr, "path", None)
@@ -256,7 +272,6 @@ def corridor_from_probe_result(pr: Any, *, yaw0: float, vx: float = 0.0, w: floa
 
 
 def visual_status_color(status: str, *, soft_risk: bool = False) -> str:
-    """Semantic color key for UI (actual hex chosen by frontend theme)."""
     s = str(status or "").upper()
     if s == STATUS_VALID and soft_risk:
         return "YELLOW"
@@ -278,5 +293,8 @@ def _wrap(a: float) -> float:
 
 
 def footprint_sample_points(x: float, y: float, yaw: float, geom: VehicleGeometry = DEFAULT_GEOM) -> List[Pt]:
-    """Expose body samples for tests / debug — same as Probe collision."""
-    return _footprint_points(x, y, yaw, geom)
+    return footprint_points(x, y, yaw, geom)
+
+
+def local_corridor_geometry_meta(geom: VehicleGeometry = DEFAULT_GEOM) -> Dict[str, Any]:
+    return geometry_telemetry(geom)
