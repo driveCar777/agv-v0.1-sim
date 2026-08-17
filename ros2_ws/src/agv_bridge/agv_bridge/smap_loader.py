@@ -311,6 +311,92 @@ def build_m32_open_straight(plan_res: float = 0.4, inflate_m: float = 0.28) -> L
     )
 
 
+def build_m33_narrow_corridor(plan_res: float = 0.4, inflate_m: float = 0.28) -> LoadedSmap:
+    """M3.3 narrow corridor — A* may succeed but footprint audit may fail (CASE B)."""
+    base = build_m32_open_straight(plan_res=plan_res, inflate_m=inflate_m)
+    half_gap = 0.42  # ~0.84 m clear — below required corridor width (0.55+0.16=0.71) with turns
+    step = plan_res
+
+    def add_wall(y_sign: float) -> None:
+        y = y_sign * half_gap
+        for x in range(-24, 25):
+            xx = float(x)
+            base.cloud.append((xx, y))
+            base.occupied.add(
+                (int(math.floor((xx - base.min_x) / plan_res)), int(math.floor((y - base.min_y) / plan_res)))
+            )
+
+    for ys in (1.0, -1.0):
+        add_wall(ys)
+    base.occupied_raw = set(base.occupied)
+    base.occupied, actual_inflate = _inflate_meters(base.occupied, plan_res, inflate_m)
+    base.actual_inflate_m = float(actual_inflate)
+    base.name = "m33_narrow_corridor"
+    base.path = "builtin:m33_narrow_corridor"
+    return base
+
+
+def build_m33_tight_corner(plan_res: float = 0.4, inflate_m: float = 0.28) -> LoadedSmap:
+    """M3.3 L-shaped corridor with tight 90° turn for path physical audit."""
+    min_x, min_y, max_x, max_y = -10.0, -10.0, 30.0, 30.0
+    pts: List[Tuple[float, float]] = []
+    occupied: set = set()
+    wall_th = 1.2
+    corridor_w = 1.6
+
+    def mark_rect(x0: float, y0: float, x1: float, y1: float, step: float = 0.35) -> None:
+        x = min(x0, x1)
+        while x <= max(x0, x1):
+            y = min(y0, y1)
+            while y <= max(y0, y1):
+                pts.append((x, y))
+                occupied.add(
+                    (int(math.floor((x - min_x) / plan_res)), int(math.floor((y - min_y) / plan_res)))
+                )
+                y += step
+            x += step
+
+    # Outer box
+    for x in range(-10, 31):
+        mark_rect(float(x), -10.0, float(x), -10.0 + wall_th)
+        mark_rect(float(x), 30.0 - wall_th, float(x), 30.0)
+    for y in range(-10, 31):
+        mark_rect(-10.0, float(y), -10.0 + wall_th, float(y))
+        mark_rect(30.0 - wall_th, float(y), 30.0, float(y))
+
+    # Inner L corridor walls: horizontal leg y∈[-0.8,0.8] x∈[0,25]; vertical leg x∈[0,1.6] y∈[0,20]
+    cy = corridor_w * 0.5
+    mark_rect(0.0, cy, 25.0, cy + 0.35)  # top of horizontal
+    mark_rect(0.0, -cy - 0.35, 25.0, -cy)  # bottom horizontal
+    mark_rect(cy, 0.0, cy + 0.35, 20.0)  # right of vertical (inner corner side)
+    mark_rect(-cy - 0.35, 0.0, -cy, 20.0)  # left vertical outer — block left of start
+
+    occupied_raw = set(occupied)
+    occupied, actual_inflate = _inflate_meters(occupied, plan_res, inflate_m)
+    pois = [
+        MapPOI("M33_L0", 2.0, 0.0, "CornerStart", yaw=0.0),
+        MapPOI("M33_L1", 22.0, 12.0, "CornerGoal", yaw=math.pi / 2),
+    ]
+    return LoadedSmap(
+        name="m33_tight_corner",
+        path="builtin:m33_tight_corner",
+        min_x=min_x,
+        min_y=min_y,
+        max_x=max_x,
+        max_y=max_y,
+        resolution=0.05,
+        cloud=_downsample(pts, 8000),
+        occupied=occupied,
+        occupied_raw=occupied_raw,
+        plan_res=plan_res,
+        pois=pois,
+        scene_kind="indoor",
+        path_color="#F59E0B",
+        requested_inflate_m=float(inflate_m),
+        actual_inflate_m=float(actual_inflate),
+    )
+
+
 def default_smap_candidates() -> List[Path]:
     # .../V0.1仿真版/ros2_ws/src/agv_bridge/agv_bridge/smap_loader.py
     here = Path(__file__).resolve()
