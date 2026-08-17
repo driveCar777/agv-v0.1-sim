@@ -79,6 +79,70 @@ def pure_pursuit_w(
     return max(-w_max, min(w_max, speed * kappa))
 
 
+def pure_pursuit_target(
+    x: float,
+    y: float,
+    yaw: float,
+    path: List[Pt],
+    vx: float,
+    lookahead_m: float = 1.35,
+) -> Dict[str, Any]:
+    """Diagnostic-only: same target selection as pure_pursuit_w, returns metadata (no cmd change)."""
+    out: Dict[str, Any] = {
+        "exists": False,
+        "x": None,
+        "y": None,
+        "lookahead_m": float(lookahead_m),
+        "local_x": None,
+        "local_y": None,
+        "alpha": None,
+        "kappa": None,
+        "distance_m": None,
+        "heading_error": None,
+        "path_index": None,
+        "s_along_m": None,
+    }
+    if not path or len(path) < 2:
+        return out
+    i0 = _nearest_index(path, x, y)
+    target = path[min(i0 + 1, len(path) - 1)]
+    acc = 0.0
+    prev = path[i0]
+    ti = i0
+    for j, p in enumerate(path[i0:], start=i0):
+        acc += math.hypot(p[0] - prev[0], p[1] - prev[1])
+        prev = p
+        ti = j
+        if acc >= lookahead_m:
+            target = p
+            break
+    tx, ty = float(target[0]), float(target[1])
+    dx = tx - x
+    dy = ty - y
+    local_x = math.cos(yaw) * dx + math.sin(yaw) * dy
+    local_y = -math.sin(yaw) * dx + math.cos(yaw) * dy
+    L = max(0.35, math.hypot(local_x, local_y))
+    alpha = math.atan2(local_y, local_x)
+    speed = vx if abs(vx) > 0.05 else 0.18
+    kappa = 2.0 * math.sin(alpha) / L if abs(speed) >= 0.04 else 0.0
+    out.update(
+        {
+            "exists": True,
+            "x": round(tx, 4),
+            "y": round(ty, 4),
+            "local_x": round(local_x, 4),
+            "local_y": round(local_y, 4),
+            "alpha": round(alpha, 5),
+            "kappa": round(kappa, 5),
+            "distance_m": round(L, 4),
+            "heading_error": round(alpha, 5),
+            "path_index": int(ti),
+            "s_along_m": round(acc, 4),
+        }
+    )
+    return out
+
+
 def kinematic_band(
     x: float,
     y: float,
@@ -538,6 +602,10 @@ class DiffDriveMppi:
         pp_w = pure_pursuit_w(
             x, y, yaw, follow_path, self._cmd_vx or (tgt if tgt is not None else 0.16), lookahead_m=la_m, w_max=self.wz_max
         )
+        pp_dbg = pure_pursuit_target(
+            x, y, yaw, follow_path, self._cmd_vx or (tgt if tgt is not None else 0.16), lookahead_m=la_m
+        )
+        follow_src = "LOCAL_PLAN" if (local_plan_path and len(local_plan_path) >= 2) else "GLOBAL_PATH"
         if force_w is not None and mmode in ("FORWARD_TURN", "REPOSITION"):
             pp_w = 0.55 * pp_w + 0.45 * float(force_w)
         samples: List[Dict[str, Any]] = []
@@ -724,6 +792,25 @@ class DiffDriveMppi:
             "local_plan_id": local_plan_id,
             "pp_lookahead_m": round(float(la_m), 3),
             "tracking_local_plan": bool(local_plan_path and len(local_plan_path) >= 2),
+            "follow_path_source": follow_src,
+            "follow_path_length_m": round(
+                sum(
+                    math.hypot(follow_path[i][0] - follow_path[i - 1][0], follow_path[i][1] - follow_path[i - 1][1])
+                    for i in range(1, len(follow_path))
+                )
+                if len(follow_path) >= 2
+                else 0.0,
+                3,
+            ),
+            "pp_follow_path_source": follow_src,
+            "pp_lookahead_point": {"x": pp_dbg.get("x"), "y": pp_dbg.get("y")} if pp_dbg.get("exists") else None,
+            "pp_alpha": pp_dbg.get("alpha"),
+            "pp_kappa": pp_dbg.get("kappa"),
+            "pp_local_x": pp_dbg.get("local_x"),
+            "pp_local_y": pp_dbg.get("local_y"),
+            "pp_heading_error": pp_dbg.get("heading_error"),
+            "w_des": round(float(w_des), 4),
+            "w_blend": round(float(w_blend), 4),
         }
 
         return MppiResult(

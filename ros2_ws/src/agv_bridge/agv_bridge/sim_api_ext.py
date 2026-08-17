@@ -84,6 +84,7 @@ def patch_mock_state(state) -> None:
     state._selected_local: Dict[str, Any] = {}
     state._kinematic_validation: Dict[str, Any] = {}
     state._open_space_forensics: Dict[str, Any] = {}
+    state._lookahead_forensics: Dict[str, Any] = {}
     state._local_plan: Dict[str, Any] = {}
     state._last_kv_id = ""
     state._last_kv_status = ""
@@ -959,6 +960,53 @@ def patch_mock_state(state) -> None:
                 state._open_space_forensics = forensic
         except Exception:
             pass
+        # P1-2-OBSERVE: lookahead / reference conflict forensics (telemetry only)
+        try:
+            from agv_bridge.nav_lookahead_forensics import assemble_lookahead_forensics, emit_lookahead_events
+
+            rec = dbg.get("recovery") if isinstance(dbg.get("recovery"), dict) else {}
+            rec_active = bool(rec.get("active"))
+            lp_dict = dbg.get("local_plan") if isinstance(dbg.get("local_plan"), dict) else {}
+
+            def _clr_la(px: float, py: float) -> float:
+                return float(world.clearance_at_xy(px, py))
+
+            def _col_la(px: float, py: float) -> bool:
+                return bool(world.collides(px, py, robot_r=0.02, include_actors=True))
+
+            lf = assemble_lookahead_forensics(
+                x=x,
+                y=y,
+                yaw=yaw,
+                global_path=gpath,
+                global_reference=dbg.get("global_reference") if isinstance(dbg.get("global_reference"), dict) else {},
+                local_plan=lp_dict,
+                mppi_meta=mppi_meta,
+                display_lookahead_pt=la,
+                display_lookahead_m=1.4,
+                cmd_vx=cmd_vx,
+                cmd_w=cmd_w,
+                safe_w=safe_w,
+                state_w=state_w,
+                pp_w=pp_w,
+                front_near=front_near,
+                left_near=float(getattr(state, "_left_near", 0.0) or 0.0),
+                right_near=float(getattr(state, "_right_near", 0.0) or 0.0),
+                path_revision=path_rev,
+                clearance_at=_clr_la,
+                collide=_col_la,
+                maneuver=maneuver,
+                maneuver_authority=dbg.get("maneuver_authority"),
+                fsm_mode=str(phase or maneuver.get("mode") or ""),
+                recovery_active=rec_active,
+                now=now,
+            )
+            emit_lookahead_events(lf)
+            dbg["lookahead_forensics"] = lf
+            with state.lock:
+                state._lookahead_forensics = lf
+        except Exception:
+            pass
         # P0-B-0: read-only observability ingest (must not affect control)
         try:
             from agv_bridge.nav_observability import OBS
@@ -1194,6 +1242,33 @@ def patch_mock_state(state) -> None:
             "controls_vehicle": False,
         }
 
+    def get_lookahead_forensics() -> Dict[str, Any]:
+        """GET /api/nav/forensics/lookahead — pink point + reference conflict diagnostics."""
+        with state.lock:
+            blob = dict(getattr(state, "_lookahead_forensics", {}) or {})
+            dbg = state._debug_snapshot if isinstance(state._debug_snapshot, dict) else {}
+        if not blob:
+            _refresh_debug_snapshot(time.time())
+            with state.lock:
+                blob = dict(getattr(state, "_lookahead_forensics", {}) or {})
+                dbg = state._debug_snapshot if isinstance(state._debug_snapshot, dict) else {}
+        lf = blob or (dbg.get("lookahead_forensics") if isinstance(dbg.get("lookahead_forensics"), dict) else {})
+        return {
+            "success": True,
+            "lookahead": lf.get("display_lookahead") or lf.get("lookahead") or {},
+            "pp_lookahead": lf.get("pp_lookahead") or {},
+            "reference": lf.get("reference") or {},
+            "controller": lf.get("controller") or {},
+            "authority": lf.get("authority") or {},
+            "diagnostics": lf.get("diagnostics") or {},
+            "three_headings": lf.get("three_headings") or {},
+            "paths": lf.get("paths") or {},
+            "events": lf.get("events") or [],
+            "lookahead_forensics": lf or {},
+            "generated_at": time.time(),
+            "controls_vehicle": False,
+        }
+
     state.get_nav_debug = get_nav_debug
     state.set_debug_level = set_debug_level
     state.set_debug_freeze = set_debug_freeze
@@ -1209,6 +1284,7 @@ def patch_mock_state(state) -> None:
     state.get_nav_preview = get_nav_preview
     state.get_nav_local_plan = get_nav_local_plan
     state.get_open_space_forensics = get_open_space_forensics
+    state.get_lookahead_forensics = get_lookahead_forensics
     state._refresh_debug_snapshot = _refresh_debug_snapshot
     def _physics_loop() -> None:
         dt = 0.05

@@ -82,6 +82,16 @@ CRITICAL_EVENTS = frozenset(
         "SPEED_TARGET_UPDATED",
         "MPPI_TRACKING_LOCAL_PLAN",
         "MPPI_LOCAL_REFERENCE_UPDATED",
+        "LOOKAHEAD_UPDATED",
+        "LOOKAHEAD_JUMP",
+        "LOOKAHEAD_SOURCE_SWITCH",
+        "LOOKAHEAD_INSIDE_OBSTACLE",
+        "LOOKAHEAD_TOO_CLOSE_TO_OBSTACLE",
+        "LOOKAHEAD_OUTSIDE_LOCAL_PLAN",
+        "REFERENCE_AUTHORITY_MISMATCH",
+        "LOCAL_PLAN_GLOBAL_PULL_SUSPECTED",
+        "LOOKAHEAD_TURNBACK",
+        "LOCAL_PLAN_RECAPTURE",
         "TRACE_START",
         "TRACE_UPDATE",
         "TRACE_END",
@@ -816,6 +826,33 @@ class NavObservability:
         self._overhead_ms_ema = (
             overhead_ms if self._overhead_ms_ema <= 0 else (0.85 * self._overhead_ms_ema + 0.15 * overhead_ms)
         )
+        lf = dbg.get("lookahead_forensics") if isinstance(dbg.get("lookahead_forensics"), dict) else {}
+        if lf:
+            decision["lookahead_forensics"] = {
+                "display": lf.get("display_lookahead") or {},
+                "pp": lf.get("pp_lookahead") or {},
+                "authority": lf.get("authority") or {},
+                "controller": lf.get("controller") or {},
+                "three_headings": lf.get("three_headings") or {},
+                "diagnostics": lf.get("diagnostics") or {},
+            }
+            diag_lf = lf.get("diagnostics") if isinstance(lf.get("diagnostics"), dict) else {}
+            for k in (
+                "global_heading_deg",
+                "local_heading_deg",
+                "lookahead_heading_deg",
+                "global_error_deg",
+                "local_error_deg",
+                "lookahead_error_deg",
+                "reference_conflict",
+                "obstacle_pass_state",
+                "display_vs_pp_separation_m",
+            ):
+                if k in diag_lf:
+                    decision["diagnostics"][k] = diag_lf[k]
+            auth = lf.get("authority") if isinstance(lf.get("authority"), dict) else {}
+            if auth.get("active_reference"):
+                decision["diagnostics"]["active_reference_authority"] = auth.get("active_reference")
 
         cycle_row = {
             "ts": now,
@@ -1482,6 +1519,36 @@ class NavObservability:
                     "requested_vx": ((c.get("decision") or {}).get("command") or {}).get("requested_vx"),
                     "safe_vx": ((c.get("decision") or {}).get("command") or {}).get("safe_vx"),
                     "state_vx": ((c.get("decision") or {}).get("command") or {}).get("state_vx"),
+                    "lookahead_source": (
+                        ((c.get("decision") or {}).get("lookahead_forensics") or {}).get("display") or {}
+                    ).get("path_source"),
+                    "pp_follow_source": (
+                        ((c.get("decision") or {}).get("lookahead_forensics") or {}).get("pp") or {}
+                    ).get("path_source"),
+                    "active_reference": (
+                        ((c.get("decision") or {}).get("lookahead_forensics") or {}).get("authority") or {}
+                    ).get("active_reference"),
+                    "lookahead_x": (
+                        ((c.get("decision") or {}).get("lookahead_forensics") or {}).get("display") or {}
+                    ).get("x"),
+                    "lookahead_y": (
+                        ((c.get("decision") or {}).get("lookahead_forensics") or {}).get("display") or {}
+                    ).get("y"),
+                    "lookahead_inside_obstacle": (
+                        ((c.get("decision") or {}).get("lookahead_forensics") or {}).get("display") or {}
+                    ).get("lookahead_inside_obstacle"),
+                    "reference_conflict": ((c.get("decision") or {}).get("diagnostics") or {}).get(
+                        "reference_conflict"
+                    ),
+                    "obstacle_pass_state": ((c.get("decision") or {}).get("diagnostics") or {}).get(
+                        "obstacle_pass_state"
+                    ),
+                    "pp_w": (
+                        ((c.get("decision") or {}).get("lookahead_forensics") or {}).get("controller") or {}
+                    ).get("pp_w"),
+                    "w_cmd": (
+                        ((c.get("decision") or {}).get("lookahead_forensics") or {}).get("controller") or {}
+                    ).get("w_cmd"),
                 }
                 for c in cycles[-80:]
             ],
