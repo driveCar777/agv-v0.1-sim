@@ -50,6 +50,8 @@ IDLE = "IDLE"
 FOLLOW_GLOBAL = "FOLLOW_GLOBAL"
 CAUTION = "CAUTION"
 OBSTACLE_APPROACH = "OBSTACLE_APPROACH"
+FUTURE_PREVIEW = "FUTURE_PREVIEW"
+SIDE_PROBE = "SIDE_PROBE"
 LOCAL_AVOID = "LOCAL_AVOID"
 PATH_RECAPTURE = "PATH_RECAPTURE"
 WAIT_FOR_CLEARANCE = "WAIT_FOR_CLEARANCE"
@@ -84,9 +86,11 @@ PRIORITY = {
     TURN_IN_PLACE: 3,
     ALIGN: 3,
     LOCAL_AVOID: 4,
+    SIDE_PROBE: 5,
     WAIT_FOR_CLEARANCE: 5,
     PATH_RECAPTURE: 6,
     OBSTACLE_APPROACH: 7,
+    FUTURE_PREVIEW: 7,
     CAUTION: 8,
     FOLLOW_GLOBAL: 9,
     REPLAN: 10,
@@ -254,6 +258,7 @@ class NavigationPolicy:
         self.deadlock_since: Optional[float] = None
         self.last_decision: Optional[PolicyDecision] = None
         self.obstacle_passed = False
+        self._was_dynamic_short = False
         self.last_w_sign = 0
         self.commitment = AvoidanceCommitment()
         self.switch_token = None  # SideSwitchAuthorizationToken | None
@@ -773,6 +778,12 @@ class NavigationPolicy:
         approach_active: bool = False,
         first_collision_distance_m: Optional[float] = None,
         required_avoidance_distance_m: Optional[float] = None,
+        avoidance_phase: str = "OPEN",
+        readiness_signal: str = "NONE",
+        side_probe_active: bool = False,
+        commit_ready: bool = False,
+        dynamic_resume_clear: bool = False,
+        d_probe_start_m: Optional[float] = None,
     ) -> PolicyDecision:
         evs: List[Dict[str, Any]] = []
         flags: Dict[str, Any] = {}
@@ -859,8 +870,11 @@ class NavigationPolicy:
                 reason = "HEADING_ALIGN"
             else:
                 state, behavior, reason = REPOSITION, BEH_REPOSITION, "ALIGN_UNSAFE"
-        elif dynamic_short and front_near < DEFAULT_GEOM.front_cost_m + 0.35:
+        elif dynamic_short and front_near < DEFAULT_GEOM.front_cost_m + 0.35 and not dynamic_resume_clear:
             state, behavior, reason = WAIT_FOR_CLEARANCE, BEH_WAIT, "DYNAMIC_SHORT→WAIT"
+        elif dynamic_resume_clear and self.state == WAIT_FOR_CLEARANCE and forward_feasible:
+            state, behavior, reason = FOLLOW_GLOBAL, BEH_FOLLOW, "DYNAMIC_CLEAR→RESUME"
+            flags["dynamic_resume"] = True
         elif dynamic_long and not forward_feasible:
             state, behavior, reason = REPLAN, BEH_REPLAN, "DYNAMIC_LONG→REPLAN"
             allow_replan = True
@@ -889,6 +903,27 @@ class NavigationPolicy:
         elif scene == "APPROACH" or flags.get("VELOCITY_BUT_PATH_STALLED"):
             state, behavior, reason = OBSTACLE_APPROACH, BEH_CAUTION, "OBSTACLE_APPROACH"
             allow_compare = front_near < DEFAULT_GEOM.front_cost_m + 0.55
+        elif str(avoidance_phase or "").upper() == "SIDE_COMMIT" and commit_ready:
+            state = LOCAL_AVOID
+            allow_compare = not self.commitment.active
+            reason = "SIDE_COMMIT→LOCAL_AVOID"
+            flags["side_commit"] = True
+        elif str(avoidance_phase or "").upper() == "SIDE_PROBE" or (
+            side_probe_active and future_collision and readiness_signal in ("WARNING", "PREDICTED")
+        ):
+            state, behavior, reason = SIDE_PROBE, BEH_CAUTION, "SIDE_PROBE"
+            allow_compare = True
+            flags["side_probe_active"] = True
+            flags["future_collision"] = True
+        elif str(avoidance_phase or "").upper() == "FUTURE_PREVIEW" or (
+            future_collision
+            and first_collision_distance_m is not None
+            and d_probe_start_m is not None
+            and first_collision_distance_m >= d_probe_start_m
+        ):
+            state, behavior, reason = FUTURE_PREVIEW, BEH_CAUTION, "FUTURE_PREVIEW"
+            flags["future_collision"] = True
+            flags["detected_only"] = True
         elif approach_active or (
             future_collision
             and first_collision_distance_m is not None
@@ -912,6 +947,8 @@ class NavigationPolicy:
             allow_replan = True
         else:
             state, behavior, reason = FOLLOW_GLOBAL, BEH_FOLLOW, "FOLLOW_GLOBAL"
+
+        self._was_dynamic_short = bool(dynamic_short)
 
         # Maneuver mode feedback (active turn / avoid wins if higher priority)
         mm = (maneuver_mode or "").upper()

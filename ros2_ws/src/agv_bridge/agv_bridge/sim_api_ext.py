@@ -845,6 +845,9 @@ def patch_mock_state(state) -> None:
             dbg["speed_policy"] = spd_obj.to_dict() if spd_obj is not None and hasattr(spd_obj, "to_dict") else {}
             dbg["maneuver_authority"] = getattr(local_mppi, "last_maneuver_authority", None)
             fp_obj = getattr(local_mppi, "last_future_preview", None)
+            sp_obj = getattr(local_mppi, "last_side_probe", None)
+            av_obj = getattr(local_mppi, "last_avoidance_state", None)
+            dr_obj = getattr(local_mppi, "last_dynamic_state", None)
             if fp_obj is not None and hasattr(fp_obj, "to_dict"):
                 op = fp_obj.to_dict()
                 op["local_plan_id"] = lp_dict.get("plan_id") if isinstance(lp_dict, dict) else None
@@ -852,7 +855,24 @@ def patch_mock_state(state) -> None:
                 op["lookahead_source"] = op.get("lookahead_source") or (
                     "LOCAL_PLAN" if lp_dict.get("active") else "GLOBAL_PATH"
                 )
+                if sp_obj is not None and hasattr(sp_obj, "to_dict"):
+                    op["side_probe"] = sp_obj.to_dict()
+                    op["probe_active"] = sp_obj.probe_active
+                    op["probe_confidence_left"] = sp_obj.left_confidence
+                    op["probe_confidence_right"] = sp_obj.right_confidence
+                    op["committed_side"] = sp_obj.committed_side_hint or sp_obj.preferred_side
+                if av_obj is not None and hasattr(av_obj, "to_dict"):
+                    op.update(av_obj.to_dict())
+                if dr_obj is not None and hasattr(dr_obj, "to_dict"):
+                    op["dynamic_resume"] = dr_obj.to_dict()
+                    op["dynamic_state"] = dr_obj.dynamic_state
+                    op["resume_block_reason"] = dr_obj.resume_block_reason
+                spd_d = dbg.get("speed_policy") if isinstance(dbg.get("speed_policy"), dict) else {}
+                op["speed_reason"] = spd_d.get("reason")
                 dbg["obstacle_preview"] = op
+                dbg["side_probe"] = op.get("side_probe") or {}
+                dbg["avoidance_phase"] = op.get("avoidance_phase") or op.get("phase")
+                dbg["dynamic_resume"] = op.get("dynamic_resume") or {}
                 with state.lock:
                     state._obstacle_preview = op
             else:
@@ -1312,6 +1332,20 @@ def patch_mock_state(state) -> None:
             "right_clearance": op.get("right_clearance"),
             "forward_clearance": op.get("forward_clearance"),
             "obstacle_pass_state": op.get("obstacle_pass_state"),
+            "avoidance_phase": op.get("avoidance_phase") or op.get("phase"),
+            "probe_active": op.get("probe_active"),
+            "probe_confidence": max(
+                float(op.get("probe_confidence_left") or 0.0),
+                float(op.get("probe_confidence_right") or 0.0),
+            ),
+            "committed_side": op.get("committed_side"),
+            "global_reconnect_blocked": op.get("global_reconnect_blocked"),
+            "dynamic_state": op.get("dynamic_state"),
+            "resume_block_reason": op.get("resume_block_reason"),
+            "d_detection_m": op.get("d_detection_m"),
+            "d_probe_start_m": op.get("d_probe_start_m"),
+            "d_commit_m": op.get("d_commit_m"),
+            "speed_reason": op.get("speed_reason"),
             "lookahead_source": op.get("lookahead_source"),
             "lookahead_distance": op.get("lookahead_distance_m"),
             "local_plan_id": lp.get("plan_id") or op.get("local_plan_id"),

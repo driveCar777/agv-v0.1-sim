@@ -119,6 +119,8 @@ class LocalPlanRequest:
     obstacle_pass_state: str = "UNKNOWN"
     obstacle_passed: bool = False
     preferred_side_hint: Optional[str] = None
+    side_commit_ready: bool = False
+    avoidance_phase: str = "OPEN"
 
 
 @dataclass
@@ -489,20 +491,20 @@ class RollingLocalPlanner:
                 and getattr(fp, "future_collision", False)
             )
             approach_early = bool(fp is not None and getattr(fp, "approach_active", False))
+            side_commit = bool(req.side_commit_ready or str(req.avoidance_phase or "").upper() == "SIDE_COMMIT")
             fwd_ok = float(req.front_near) >= float(geom.front_stop_m) + 0.15
-            if future_blocked or approach_early:
+            if future_blocked or (approach_early and side_commit):
                 fwd_ok = False
             if sc in ("OPEN", "OPEN_SPACE", "") and fwd_ok and not future_blocked:
                 best = valid[0].score
                 fwds = [c for c in valid if c.kind == KIND_FORWARD and c.score <= best + 1.15]
                 selected = fwds[0] if fwds else valid[0]
             else:
-                # P0-D: prefer valid side arc when forward global path is future-blocked
                 side_pref = req.preferred_side_hint
                 if side_pref is None and fp is not None:
                     side_pref = getattr(fp, "preferred_side", None)
                 arcs = [c for c in valid if c.kind in (KIND_LEFT_ARC, KIND_RIGHT_ARC)]
-                if future_blocked and arcs:
+                if future_blocked and side_commit and arcs:
                     if side_pref == "LEFT":
                         lefts = [c for c in arcs if c.kind == KIND_LEFT_ARC]
                         selected = lefts[0] if lefts else arcs[0]
@@ -668,6 +670,8 @@ class RollingLocalPlanner:
         global_cost = 2.2 * lat_mean
         heading_cost = 1.4 * abs(cand.heading_error)
         clr_cost = 0.0 if cand.min_clearance is None else 1.8 * max(0.0, 0.55 - cand.min_clearance)
+        if cand.min_clearance is not None and cand.min_clearance < 0.45:
+            clr_cost += 2.5 * max(0.0, 0.45 - cand.min_clearance) ** 2
         curv_cost = 0.55 * abs(kappa)
         speed_cost = 0.90 * abs(vx - target_vx)
         reconnect_mult = 3.6 if reconnect_gate else 1.0

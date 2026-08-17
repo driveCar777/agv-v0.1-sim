@@ -47,6 +47,9 @@ from agv_bridge.nav_obstacle_preview import (
     diagnose_late_avoidance,
     emit_obstacle_preview_events,
 )
+from agv_bridge.nav_side_probe import run_side_probe
+from agv_bridge.nav_avoidance_phase import AvoidancePhaseTracker
+from agv_bridge.nav_dynamic_resume import DynamicResumeTracker
 from agv_bridge.nav_recovery import (
     ACT_CONTINUE,
     ACT_HISTORICAL_RETREAT,
@@ -142,6 +145,11 @@ class LocalMppiModel:
         self.last_maneuver_authority = AUTH_ROLLING
         self.last_future_preview = None
         self._preview_cache = GlobalPreviewCache()
+        self.last_side_probe = None
+        self.avoidance_phase = AvoidancePhaseTracker()
+        self.dynamic_resume = DynamicResumeTracker()
+        self.last_avoidance_state = None
+        self.last_dynamic_state = None
 
     def set_control_mode(self, mode: str) -> str:
         m = (mode or "mppi").strip().lower()
@@ -176,6 +184,11 @@ class LocalMppiModel:
         self.last_maneuver_authority = AUTH_ROLLING
         self.last_future_preview = None
         self._preview_cache = GlobalPreviewCache()
+        self.last_side_probe = None
+        self.avoidance_phase = AvoidancePhaseTracker()
+        self.dynamic_resume = DynamicResumeTracker()
+        self.last_avoidance_state = None
+        self.last_dynamic_state = None
 
     def begin_reverse_escape(self, now: float) -> bool:
         """Legacy hook — prefer ManeuverFSM + Policy.allow_recovery."""
@@ -348,6 +361,85 @@ class LocalMppiModel:
             self.last_future_preview = None
         fp = self.last_future_preview
 
+        side_probe_active = bool(
+            fp is not None and fp.future_collision and fp.first_collision_distance_m is not None
+        )
+        try:
+            self.last_side_probe = run_side_probe(
+                x=x,
+                y=y,
+                yaw=yaw,
+                vx=float(state_vx),
+                horizon_m=float(fp.preview_distance_m) if fp is not None else 5.0,
+                collide=collide,
+                clearance_at=clearance_at,
+                global_path=global_path if path_valid else None,
+                geom=self.geom,
+                probe_active=side_probe_active,
+                side_history=list(self.avoidance_phase.state.side_history),
+            )
+        except Exception:
+            self.last_side_probe = None
+        sp = self.last_side_probe
+
+        committed_side = None
+        try:
+            if self.policy.commitment.active:
+                committed_side = getattr(self.policy.commitment, "side", None) or getattr(
+                    self.policy.commitment, "committed_side", None
+                )
+        except Exception:
+            committed_side = None
+
+        try:
+            self.last_avoidance_state = self.avoidance_phase.update(
+                now=now,
+                vx=float(state_vx),
+                preview_m=float(fp.preview_distance_m) if fp else 5.0,
+                future_collision=bool(fp.future_collision) if fp else False,
+                first_collision_m=fp.first_collision_distance_m if fp else None,
+                front_near=float(front_near),
+                left_free=float(left_free),
+                right_free=float(right_free),
+                lateral_error=float(lat),
+                side_probe_active=bool(sp.probe_active) if sp else False,
+                probe_confidence_left=float(sp.left_confidence) if sp else 0.0,
+                probe_confidence_right=float(sp.right_confidence) if sp else 0.0,
+                preferred_side=sp.preferred_side if sp else None,
+                commit_ready=bool(sp.commit_ready) if sp else False,
+                committed_side_external=committed_side,
+                obstacle_passed_external=ext_passed,
+                commitment_active=bool(self.policy.commitment.active),
+                geom=self.geom,
+            )
+        except Exception:
+            self.last_avoidance_state = None
+        av = self.last_avoidance_state
+
+        dyn_resume_clear = False
+        try:
+            lp_valid = self.last_local_plan is not None and getattr(self.last_local_plan, "status", "") in (
+                "CREATED", "ACTIVE", "REPLACED", "FALLBACK",
+            )
+            self.last_dynamic_state = self.dynamic_resume.update(
+                now=now,
+                dynamic_short=bool(dynamic_short),
+                dynamic_long=bool(dynamic_long),
+                policy_state=str(getattr(self.last_policy, "state", "") or ""),
+                policy_reason=str(getattr(self.last_policy, "reason", "") or ""),
+                maneuver_mode=str(self.maneuver.mode or ""),
+                front_near=float(front_near),
+                forward_feasible=forward_feasible,
+                safety_zero=bool(safety_zero),
+                local_plan_valid=lp_valid,
+                recovery_loop=self.policy.recovery_loop(now),
+                replan_loop=self.policy.replan_loop(now),
+                oscillation_loop=self.policy.oscillation_loop(now),
+            )
+            dyn_resume_clear = bool(self.last_dynamic_state.resume_allowed)
+        except Exception:
+            self.last_dynamic_state = None
+
         pol = self.policy.step(
             now=now,
             nav_active=nav_active,
@@ -383,6 +475,12 @@ class LocalMppiModel:
             approach_active=bool(fp.approach_active) if fp is not None else False,
             first_collision_distance_m=fp.first_collision_distance_m if fp is not None else None,
             required_avoidance_distance_m=fp.required_avoidance_distance_m if fp is not None else None,
+            avoidance_phase=str(av.phase) if av is not None else "OPEN",
+            readiness_signal=str(av.signal) if av is not None else "NONE",
+            side_probe_active=bool(sp.probe_active) if sp else False,
+            commit_ready=bool(sp.commit_ready) if sp else False,
+            dynamic_resume_clear=dyn_resume_clear,
+            d_probe_start_m=(av.tiers.get("d_probe_start_m") if av else None),
         )
         self.last_policy = pol
 
@@ -486,6 +584,8 @@ class LocalMppiModel:
             "recovery_target_distance_m": self._recovery_target_distance_m(),
             "recovery_force_vx": -0.12,
             "recovery_force_w": 0.0,
+            "dynamic_resume_clear": dyn_resume_clear,
+            "avoidance_phase": str(av.phase) if av is not None else "OPEN",
         }
 
         decision = self.maneuver.decide(
@@ -699,6 +799,14 @@ class LocalMppiModel:
             heading_error=float(heading_error),
             recovery_active=authority == AUTH_RECOVERY,
             force_reverse=bool(want_rev),
+            avoidance_phase=str(av.phase) if av is not None else "OPEN",
+            probe_active=bool(sp.probe_active) if sp else False,
+            commit_ready=bool(sp.commit_ready) if sp else False,
+            dynamic_resume_vx=(
+                self.last_dynamic_state.resume_target_vx
+                if self.last_dynamic_state is not None and self.last_dynamic_state.resume_allowed
+                else None
+            ),
         )
         self.last_speed = spd
 
@@ -729,7 +837,9 @@ class LocalMppiModel:
                     future_preview=fp,
                     obstacle_pass_state=str(fp.obstacle_pass_state) if fp is not None else "UNKNOWN",
                     obstacle_passed=bool(fp.obstacle_passed) if fp is not None else ext_passed,
-                    preferred_side_hint=fp.preferred_side if fp is not None else None,
+                    preferred_side_hint=sp.preferred_side if sp is not None else (fp.preferred_side if fp else None),
+                    side_commit_ready=bool(sp.commit_ready) if sp else False,
+                    avoidance_phase=str(av.phase) if av is not None else "OPEN",
                 )
             )
             self.last_local_plan_result = lp_res
@@ -755,6 +865,39 @@ class LocalMppiModel:
                             component="obstacle_preview",
                             data={**fp.to_dict(), "front_near": float(front_near)},
                             min_interval_s=2.0,
+                        )
+                    if sp is not None and sp.oscillation_suspected:
+                        from agv_bridge.nav_observability import OBS
+
+                        OBS.emit(
+                            "SIDE_PROBE_OSCILLATION",
+                            level="WARN",
+                            category="PLANNING",
+                            component="side_probe",
+                            data=sp.to_dict(),
+                            min_interval_s=2.0,
+                        )
+                    if sp is not None and sp.wall_hugging_suspected:
+                        from agv_bridge.nav_observability import OBS
+
+                        OBS.emit(
+                            "WALL_HUGGING_SUSPECTED",
+                            level="NOTICE",
+                            category="PLANNING",
+                            component="side_probe",
+                            data=sp.to_dict(),
+                            min_interval_s=2.5,
+                        )
+                    if av is not None and av.global_reconnect_blocked and av.phase not in ("OBSTACLE_PASS", "GLOBAL_RECONNECT"):
+                        from agv_bridge.nav_observability import OBS
+
+                        OBS.emit(
+                            "EARLY_GLOBAL_RECONNECT",
+                            level="NOTICE",
+                            category="PLANNING",
+                            component="avoidance_phase",
+                            data=av.to_dict(),
+                            min_interval_s=1.5,
                         )
             except Exception:
                 pass

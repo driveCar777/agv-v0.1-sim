@@ -754,10 +754,23 @@
         if (op.right_corridor_poses?.length >= 2) {
           this._addPolyline(op.right_corridor_poses.map((p) => [p.x, p.y]), 0x22d3ee, 0.08);
         }
-        if (op.first_collision_distance_m != null && op.collision_pose) {
+        if op.first_collision_distance_m != null && op.collision_pose) {
           const cp = op.collision_pose;
           this._addDisk(cp.x, cp.y, 0.10, 0xea580c, 0.85);
         }
+        const tiers = [
+          ["d_detection_m", "D", 0x22c55e],
+          ["d_probe_start_m", "P", 0xfbbf24],
+          ["d_hard_stop_m", "S", 0xef4444],
+        ];
+        const yaw0 = pose?.angle || 0;
+        tiers.forEach(([key, label, col]) => {
+          const dm = op[key];
+          if (dm == null || dm <= 0) return;
+          const mx = x + Math.cos(yaw0) * dm;
+          const my = y + Math.sin(yaw0) * dm;
+          this._addDisk(mx, my, 0.07, col, 0.75);
+        });
       }
       const fc = dbg.local_planner?.first_collision;
       if (layers.collision && fc) this._addDisk(fc.x, fc.y, 0.14, 0xdc2626, 0.85);

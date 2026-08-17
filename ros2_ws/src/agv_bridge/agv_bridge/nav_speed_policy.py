@@ -34,6 +34,16 @@ LIMIT_GOAL = "GOAL_NEAR"
 LIMIT_SCENE = "SCENE_PROFILE"
 LIMIT_KINEMATIC = "KINEMATIC_FEASIBLE"
 
+# P0-D.1 speed reasons
+REASON_NORMAL_CRUISE = "NORMAL_CRUISE"
+REASON_FUTURE_PREVIEW = "FUTURE_OBSTACLE_PREVIEW"
+REASON_SIDE_PROBE = "SIDE_PROBE"
+REASON_SIDE_COMMIT = "SIDE_COMMIT"
+REASON_CURVATURE_LIMIT = "CURVATURE_LIMIT"
+REASON_CLEARANCE_LIMIT = "CLEARANCE_LIMIT"
+REASON_SAFETY_LIMIT = "SAFETY_LIMIT"
+REASON_DYNAMIC_RESUME = "DYNAMIC_RESUME"
+
 
 def _clamp(v: float, lo: float, hi: float) -> float:
     return max(lo, min(hi, v))
@@ -99,6 +109,10 @@ class SpeedPolicy:
         kinematic_feasible_vx: Optional[float] = None,
         recovery_active: bool = False,
         force_reverse: bool = False,
+        avoidance_phase: str = "OPEN",
+        probe_active: bool = False,
+        commit_ready: bool = False,
+        dynamic_resume_vx: Optional[float] = None,
     ) -> SpeedPolicyResult:
         g = self.geom or DEFAULT_GEOM
         hw = float(g.max_vx)
@@ -131,6 +145,29 @@ class SpeedPolicy:
             )
             self.last = res
             return res
+
+        ap = str(avoidance_phase or "OPEN").upper()
+        # P0-D.1 soft slowdown — gradual, not 0.30→0.10 cliff
+        if dynamic_resume_vx is not None and float(dynamic_resume_vx) > 0.04:
+            target = min(cruise, float(dynamic_resume_vx))
+            reason = REASON_DYNAMIC_RESUME
+            limits.append(LIMIT_SCENE)
+        elif ap == "FUTURE_PREVIEW":
+            target = min(target, max(0.27, cruise - 0.02))
+            reason = REASON_FUTURE_PREVIEW
+            limits.append(LIMIT_SCENE)
+        elif ap in ("SIDE_PROBE", "OBSTACLE_APPROACH"):
+            target = min(target, max(0.24, cruise - 0.05))
+            reason = REASON_SIDE_PROBE
+            limits.append(LIMIT_SCENE)
+        elif ap == "SIDE_COMMIT":
+            target = min(target, max(0.22, cruise - 0.07))
+            reason = REASON_SIDE_COMMIT
+            limits.append(LIMIT_SCENE)
+        elif probe_active and ap not in ("OPEN", "OBSTACLE_PASS", "GLOBAL_RECONNECT"):
+            target = min(target, max(0.26, cruise - 0.03))
+            reason = REASON_FUTURE_PREVIEW
+            limits.append(LIMIT_SCENE)
 
         if sc in ("TIGHT", "NARROW") or min(float(left_free), float(right_free)) < 0.55:
             target = min(target, TIGHT_VX)

@@ -552,6 +552,11 @@ class ManeuverFSM:
         # Active reverse evaluation / early abort
         reverse_aborting = False
         skip_fresh = False
+        if pol.get("dynamic_resume_clear") and self.mode == WAIT_FOR_CLEARANCE:
+            mode = FORWARD_TRACK
+            reason = "DYNAMIC_RESUME"
+            skip_fresh = True
+            decision_label = "FORWARD"
         if self.mode == REVERSE_ESCAPE and self.reverse_before is not None:
             dt_rev = self.time_in_mode(now)
             if self._recovery_start_pose is None:

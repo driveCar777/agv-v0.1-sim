@@ -926,6 +926,21 @@ class NavObservability:
                 if isinstance(dbg.get("kinematic_validation"), dict)
                 else None,
                 "local_max_distance_m": round(max_cand_dist, 3),
+                "future_preview_distance_m": (dbg.get("obstacle_preview") or {}).get("future_preview_m"),
+                "first_collision_distance_m": (dbg.get("obstacle_preview") or {}).get("first_collision_distance_m"),
+                "required_avoidance_distance_m": (dbg.get("obstacle_preview") or {}).get("required_avoidance_distance_m"),
+                "probe_active": (dbg.get("obstacle_preview") or {}).get("probe_active"),
+                "probe_confidence": max(
+                    float((dbg.get("obstacle_preview") or {}).get("probe_confidence_left") or 0.0),
+                    float((dbg.get("obstacle_preview") or {}).get("probe_confidence_right") or 0.0),
+                ),
+                "committed_side": (dbg.get("obstacle_preview") or {}).get("committed_side"),
+                "obstacle_pass_state": (dbg.get("obstacle_preview") or {}).get("obstacle_pass_state"),
+                "avoidance_phase": (dbg.get("avoidance_phase") or (dbg.get("obstacle_preview") or {}).get("phase")),
+                "global_reconnect_blocked": (dbg.get("obstacle_preview") or {}).get("global_reconnect_blocked"),
+                "dynamic_state": (dbg.get("dynamic_resume") or {}).get("dynamic_state"),
+                "resume_block_reason": (dbg.get("dynamic_resume") or {}).get("resume_block_reason"),
+                "speed_reason": (dbg.get("speed_policy") or {}).get("reason"),
                 "global_vs_local": {
                     "global_preview_m": gref.get("preview_m") if gref else gvl.get("global_preview_m"),
                     "local_max_distance_m": round(max_cand_dist, 3),
