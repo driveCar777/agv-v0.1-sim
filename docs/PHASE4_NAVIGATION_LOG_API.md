@@ -14,9 +14,11 @@ Aliases: `/api/logs/...` and `/api/nav/logs/...` are equivalent.
 
 Default `limit <= 200`. Use `since` / `cursor` for incremental fetch.
 
-Preview (read-only): `GET /api/nav/preview` → `global_reference` + `local_candidates` + `selected_local` + `global_vs_local`.
+Preview (read-only): `GET /api/nav/preview` → `global_reference` + `local_candidates` + `selected_local` + `global_vs_local` + `kinematic_validation`.
 
 Env: `NAV_GLOBAL_PREVIEW=0` disables Global Preview build (telemetry empty / DISABLED); control unchanged.
+
+Env: `NAV_KINEMATIC_VALIDATOR=0` disables P0-C validator (`kinematic_valid=null`, `status=NOT_VALIDATED`); control unchanged.
 
 ---
 
@@ -27,7 +29,7 @@ Filter query params:
 | Param | Notes |
 |-------|--------|
 | `level` | exact, or `WARN+` for WARN and above |
-| `category` | `SAFETY`, `CANDIDATE`, `DIAGNOSTIC`, `GLOBAL_PLANNING`, … |
+| `category` | `SAFETY`, `CANDIDATE`, `DIAGNOSTIC`, `GLOBAL_PLANNING`, `KINEMATIC`, … |
 | `event` | e.g. `SPIN_LOOP_SUSPECTED`, `GLOBAL_PREVIEW_UPDATED` |
 | `source` / `component` | |
 | `trace_id` / `cycle_id` | |
@@ -75,6 +77,20 @@ local_max_distance_m
 expected_nominal_distance_m   # dynamic: speed × local horizon (≈1.5s)
 legacy_nominal_baseline_m     # historical 0.25m (not starvation truth)
 global_vs_local { global_preview_m, local_max_distance_m, selected_candidate, expected_local_distance_m }
+```
+
+**P0-C fields:**
+
+```text
+kinematic_status            # VALID | INVALID | DEGRADED | NOT_VALIDATED
+kinematic_valid             # true | false | null
+max_curvature
+min_turn_radius_m
+first_invalid_distance_m
+speed_limited
+validation_revision
+cache_hit
+compute_ms
 ```
 
 Owner semantics:
@@ -149,6 +165,8 @@ trace_id  TRACE-AVOID-000017 / TRACE-RECOVERY-000004 / TRACE-REPLAN-000012
 
 **P0-B:** `GLOBAL_PREVIEW_UPDATED`, `GLOBAL_PREVIEW_LIMITED`, `GLOBAL_LOCAL_HORIZON_MISMATCH`, `TRACE_START`, `TRACE_END`, `TRACE_UPDATE`, `TRACE_ABORT`.
 
+**P0-C:** `KINEMATIC_VALIDATION_STARTED`, `KINEMATIC_VALIDATION_RESULT`, `KINEMATIC_PATH_REJECTED`, `KINEMATIC_CLEARANCE_WARNING`, `KINEMATIC_SPEED_LIMITED`.
+
 ### Global Preview events
 
 | Event | When |
@@ -156,6 +174,20 @@ trace_id  TRACE-AVOID-000017 / TRACE-RECOVERY-000004 / TRACE-REPLAN-000012
 | `GLOBAL_PREVIEW_UPDATED` | Meaningful preview change (≥0.4 m / reason / path_revision) — not every 20 Hz tick |
 | `GLOBAL_PREVIEW_LIMITED` | Entering `GOAL_LIMITED` or `PATH_LIMITED` |
 | `GLOBAL_LOCAL_HORIZON_MISMATCH` | `global_preview_m / local_max ≥ ~8` — **fact only**, not a bug verdict (P1 may revisit local horizon) |
+
+### Kinematic validation events (P0-C)
+
+Emitted on `validation_id` / status change only (not 20 Hz). `focus=PLANNING` includes these. `category=KINEMATIC`.
+
+| Event | When |
+|-------|------|
+| `KINEMATIC_VALIDATION_STARTED` | New validation_id |
+| `KINEMATIC_VALIDATION_RESULT` | Result attached (`VALID` / `INVALID` / `DEGRADED`) |
+| `KINEMATIC_PATH_REJECTED` | `INVALID` and reason ≠ `NO_PATH` |
+| `KINEMATIC_CLEARANCE_WARNING` | Clearance below `safety_margin_m` (`DEGRADED`) |
+| `KINEMATIC_SPEED_LIMITED` | Feasible `v = ω_max/|κ|` below `v_max` (still may be `VALID`) |
+
+Validator does **not** emit cmd_vel and does **not** SAFE_STOP on INVALID.
 
 ### Planning starvation (dynamic)
 

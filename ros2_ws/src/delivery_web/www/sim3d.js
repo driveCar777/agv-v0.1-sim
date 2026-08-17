@@ -505,17 +505,66 @@
       group.add(line);
     }
 
-    /** P0-B LAYER 1: long Global Reference Preview (REFERENCE_ONLY, translucent). */
+    _addDashedLineTo(group, pts, color, y, opacity) {
+      if (!pts || pts.length < 2) return;
+      const arr = [];
+      for (const p of pts) arr.push(p.x, y, -p.y);
+      const geo = new THREE.BufferGeometry();
+      geo.setAttribute("position", new THREE.Float32BufferAttribute(arr, 3));
+      const mat = new THREE.LineDashedMaterial({
+        color,
+        dashSize: 0.22,
+        gapSize: 0.14,
+        transparent: true,
+        opacity: opacity != null ? opacity : 0.85,
+        depthWrite: false,
+      });
+      const line = new THREE.Line(geo, mat);
+      line.computeLineDistances();
+      group.add(line);
+    }
+
+    _splitPosesAtS(poses, sCut) {
+      if (sCut == null || !Number.isFinite(Number(sCut))) {
+        return { before: poses || [], after: [] };
+      }
+      const cut = Number(sCut);
+      const before = [];
+      const after = [];
+      for (const p of poses || []) {
+        const s = p && p.s != null ? Number(p.s) : null;
+        if (s == null || s + 1e-6 < cut) before.push(p);
+        else after.push(p);
+      }
+      if (before.length && after.length) after.unshift(before[before.length - 1]);
+      return { before, after };
+    }
+
+    /** P0-B/C LAYER 1: Global Reference Preview (REFERENCE_ONLY). Color = kinematic status. */
     setGlobalReference(gref) {
       const group = this._ensureLayerGroup("_globalRefGroup");
       if (!gref || !gref.poses || gref.poses.length < 2) return;
       const status = String(gref.status || "").toUpperCase();
       if (status === "GOAL_REACHED" || status === "NO_GLOBAL_PATH" || status === "DISABLED") return;
-      // Translucent slate — clearly not "certified safe"
-      this._addLineTo(group, gref.poses, 0x64748b, 0.06, 0.45);
+      const kst = String(gref.kinematic_status || "").toUpperCase();
+      const SLATE = 0x64748b;
+      const AMBER = 0xd97706;
+      const RED = 0xef4444;
+      if (kst === "DEGRADED") {
+        this._addLineTo(group, gref.poses, AMBER, 0.06, 0.7);
+      } else if (kst === "INVALID") {
+        const parts = this._splitPosesAtS(gref.poses, gref.first_invalid_distance_m);
+        if (parts.before.length >= 2) this._addLineTo(group, parts.before, SLATE, 0.06, 0.45);
+        if (parts.after.length >= 2) this._addDashedLineTo(group, parts.after, RED, 0.07, 0.9);
+        else if (parts.before.length < 2) this._addDashedLineTo(group, gref.poses, RED, 0.07, 0.9);
+      } else {
+        // VALID / NOT_VALIDATED: translucent slate — not certified-safe paint
+        this._addLineTo(group, gref.poses, SLATE, 0.06, kst === "VALID" ? 0.62 : 0.45);
+      }
       if (gref.left_edge && gref.right_edge && gref.left_edge.length >= 2) {
-        this._addLineTo(group, gref.left_edge, 0x94a3b8, 0.05, 0.28);
-        this._addLineTo(group, gref.right_edge, 0x94a3b8, 0.05, 0.28);
+        const edgeCol = kst === "INVALID" ? 0xfca5a5 : kst === "DEGRADED" ? 0xfbbf24 : 0x94a3b8;
+        this._addLineTo(group, gref.left_edge, edgeCol, 0.05, 0.28);
+        this._addLineTo(group, gref.right_edge, edgeCol, 0.05, 0.28);
       }
       group.renderOrder = 0;
     }

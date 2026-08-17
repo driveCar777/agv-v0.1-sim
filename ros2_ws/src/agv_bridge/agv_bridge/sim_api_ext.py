@@ -82,6 +82,9 @@ def patch_mock_state(state) -> None:
     state._global_reference: Dict[str, Any] = {}
     state._local_candidates_layer: Dict[str, Any] = {}
     state._selected_local: Dict[str, Any] = {}
+    state._kinematic_validation: Dict[str, Any] = {}
+    state._last_kv_id = ""
+    state._last_kv_status = ""
     state._stuck_since = 0.0
     state._last_progress_dist = None
     state._track_mode = "forward"
@@ -772,14 +775,141 @@ def patch_mock_state(state) -> None:
                     expected_local_distance_m(state_vx=state_vx, requested_vx=cmd_vx), 3
                 ),
             }
+            # P0-C: kinematic validation AFTER control — telemetry only
+            kv_api: Dict[str, Any] = {
+                "status": "NOT_VALIDATED",
+                "kinematic_valid": None,
+                "kinematic_status": "NOT_VALIDATED",
+                "controls_vehicle": False,
+            }
+            try:
+                from agv_bridge.nav_kinematic import empty_validation, validate_global_path, validator_enabled
+
+                if validator_enabled():
+                    src_path = raw or gpath
+
+                    def _occ(px: float, py: float) -> bool:
+                        return bool(world.collides(px, py, robot_r=0.02, include_actors=True))
+
+                    kv_res = validate_global_path(
+                        src_path,
+                        path_revision=path_rev,
+                        collide=_occ,
+                        clearance_at=lambda px, py: float(world.clearance_at_xy(px, py)),
+                        goal_reached=str(nav_mode) == "arrived" or str(stop_reason) in ("GOAL_REACHED", "STOP_GOAL"),
+                        cache_token=len(world.dyn_obstacles),
+                    )
+                    kv_api = kv_res.to_api(include_poses=False)
+                else:
+                    kv_api = empty_validation(reason="NOT_VALIDATED", revision=path_rev)
+                    kv_api["status"] = "NOT_VALIDATED"
+                    kv_api["kinematic_valid"] = None
+                    kv_api["kinematic_status"] = "NOT_VALIDATED"
+                    kv_api["valid"] = None
+            except Exception:
+                kv_api = {
+                    "status": "DEGRADED",
+                    "kinematic_valid": None,
+                    "kinematic_status": "DEGRADED",
+                    "reason": "NUMERIC_FAILURE",
+                    "controls_vehicle": False,
+                }
+            gref["geometry_status"] = gref.get("geometry_status") or "REFERENCE_ONLY"
+            gref["kinematic_status"] = kv_api.get("kinematic_status") or kv_api.get("status")
+            gref["kinematic_valid"] = kv_api.get("kinematic_valid")
+            gref["first_invalid_distance_m"] = kv_api.get("first_invalid_distance_m")
+            gref["speed_limited"] = kv_api.get("speed_limited")
+            gref["max_curvature"] = kv_api.get("max_curvature")
+            gref["min_turn_radius_m"] = kv_api.get("min_turn_radius_m")
+            gvl["kinematic_status"] = gref["kinematic_status"]
+            gvl["kinematic_valid"] = gref["kinematic_valid"]
             dbg["global_reference"] = gref
             dbg["local_candidates"] = loc_layer
             dbg["selected_local"] = selected_local
             dbg["global_vs_local"] = gvl
+            dbg["kinematic_validation"] = kv_api
             with state.lock:
                 state._global_reference = gref
                 state._local_candidates_layer = loc_layer
                 state._selected_local = selected_local
+                state._kinematic_validation = kv_api
+            try:
+                from agv_bridge.nav_observability import OBS
+
+                vid = str(kv_api.get("validation_id") or "")
+                stt = str(kv_api.get("status") or "")
+                prev_id = str(getattr(state, "_last_kv_id", "") or "")
+                prev_st = str(getattr(state, "_last_kv_status", "") or "")
+                if (vid and vid != prev_id) or (stt and stt != prev_st):
+                    state._last_kv_id = vid or prev_id
+                    state._last_kv_status = stt
+                    payload = {
+                        "validation_id": vid,
+                        "path_revision": kv_api.get("path_revision"),
+                        "status": stt,
+                        "valid": kv_api.get("valid"),
+                        "reason": kv_api.get("reason"),
+                        "max_curvature": kv_api.get("max_curvature"),
+                        "min_turn_radius_m": kv_api.get("min_turn_radius_m"),
+                        "max_required_w_rad_s": kv_api.get("max_required_w_rad_s"),
+                        "max_feasible_speed_mps": kv_api.get("max_feasible_speed_mps"),
+                        "min_clearance_m": kv_api.get("min_clearance_m"),
+                        "collision": kv_api.get("swept_collision"),
+                        "first_invalid_distance_m": kv_api.get("first_invalid_distance_m"),
+                        "cache_hit": kv_api.get("cache_hit"),
+                        "compute_ms": kv_api.get("compute_ms"),
+                    }
+                    OBS.emit(
+                        "KINEMATIC_VALIDATION_STARTED",
+                        level="INFO",
+                        category="KINEMATIC",
+                        component="kinematic_validator",
+                        data={"validation_id": vid, "path_revision": kv_api.get("path_revision")},
+                        force=True,
+                    )
+                    OBS.emit(
+                        "KINEMATIC_VALIDATION_RESULT",
+                        level="WARN" if stt == "INVALID" else "INFO",
+                        category="KINEMATIC",
+                        component="kinematic_validator",
+                        reason=kv_api.get("reason"),
+                        data=payload,
+                        force=True,
+                    )
+                    if stt == "INVALID" and kv_api.get("reason") not in ("NO_PATH", None, ""):
+                        OBS.emit(
+                            "KINEMATIC_PATH_REJECTED",
+                            level="WARN",
+                            category="KINEMATIC",
+                            component="kinematic_validator",
+                            reason=kv_api.get("reason"),
+                            data=payload,
+                            force=True,
+                        )
+                    if kv_api.get("reason") == "CLEARANCE_TOO_LOW" or "CLEARANCE_TOO_LOW" in (kv_api.get("violations") or []):
+                        OBS.emit(
+                            "KINEMATIC_CLEARANCE_WARNING",
+                            level="WARN",
+                            category="KINEMATIC",
+                            component="kinematic_validator",
+                            data=payload,
+                            force=True,
+                        )
+                    if kv_api.get("speed_limited"):
+                        OBS.emit(
+                            "KINEMATIC_SPEED_LIMITED",
+                            level="NOTICE",
+                            category="KINEMATIC",
+                            component="kinematic_validator",
+                            data={
+                                "speed_limited_from_m": kv_api.get("speed_limited_from_m"),
+                                "max_feasible_speed_mps": kv_api.get("max_feasible_speed_mps"),
+                                "max_required_w_rad_s": kv_api.get("max_required_w_rad_s"),
+                            },
+                            force=True,
+                        )
+            except Exception:
+                pass
         except Exception:
             pass
         # P0-B-0: read-only observability ingest (must not affect control)
@@ -929,11 +1059,12 @@ def patch_mock_state(state) -> None:
         )}
 
     def get_nav_preview() -> Dict[str, Any]:
-        """GET-only Global/Local preview. Never a control API."""
+        """GET-only Global/Local preview + kinematic validation. Never a control API."""
         with state.lock:
             gref = dict(getattr(state, "_global_reference", {}) or {})
             loc = dict(getattr(state, "_local_candidates_layer", {}) or {})
             sel = dict(getattr(state, "_selected_local", {}) or {})
+            kv = dict(getattr(state, "_kinematic_validation", {}) or {})
             gvl = (state._debug_snapshot or {}).get("global_vs_local") if isinstance(state._debug_snapshot, dict) else {}
         if not gref:
             _refresh_debug_snapshot(time.time())
@@ -941,6 +1072,7 @@ def patch_mock_state(state) -> None:
                 gref = dict(getattr(state, "_global_reference", {}) or {})
                 loc = dict(getattr(state, "_local_candidates_layer", {}) or {})
                 sel = dict(getattr(state, "_selected_local", {}) or {})
+                kv = dict(getattr(state, "_kinematic_validation", {}) or {})
                 gvl = (state._debug_snapshot or {}).get("global_vs_local") if isinstance(state._debug_snapshot, dict) else {}
         return {
             "success": True,
@@ -948,6 +1080,7 @@ def patch_mock_state(state) -> None:
             "local_candidates": loc,
             "selected_local": sel,
             "global_vs_local": gvl or {},
+            "kinematic_validation": kv or {},
             "geometry_version": "p0a",
             "generated_at": time.time(),
             "controls_vehicle": False,

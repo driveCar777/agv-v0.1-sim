@@ -28,7 +28,10 @@ class VehicleGeometry:
 
     length: float = 1.05
     width: float = 0.55
-    bumper_l: float = 0.55  # center → front/rear (overhang); also front_overhang_m / rear_overhang_m
+    bumper_l: float = 0.55  # MPPI bumper SAMPLE offset (center→check-point). NOT polygon half-length.
+    # Narrow-phase rectangle uses 0.5*length = 0.525 m (P0-A clamps bumper_l to half-length).
+    # bumper_l remains 0.55 because MPPI bumper_pose samples 2.5 cm proud of the body — do not retune.
+
     # Broad-phase bounding circles (NOT final collision truth)
     planner_radius: float = 0.25
     local_radius: float = 0.24

@@ -145,6 +145,7 @@ class SimApp:
             global_reference = dict(getattr(self.state, "_global_reference", {}) or {})
             local_cands_layer = dict(getattr(self.state, "_local_candidates_layer", {}) or {})
             selected_local = dict(getattr(self.state, "_selected_local", {}) or {})
+            kinematic_validation = dict(getattr(self.state, "_kinematic_validation", {}) or {})
             path_rev = int(getattr(self.state, "_global_path_revision", 0) or 0)
         navigating = nav_mode in ("tracking", "avoid", "planned", "planner_debug")
         # 未导航：车周静态点云；导航中：实时雷达点云为主
@@ -268,6 +269,7 @@ class SimApp:
                 if local_cands_layer
                 else {"count": 0, "items": []},
                 "selected_local": selected_local or None,
+                "kinematic_validation": self._kinematic_summary(kinematic_validation),
                 "global_path_revision": path_rev,
                 "safety_envelope": {
                     "front_near": round(front_near, 3),
@@ -307,7 +309,12 @@ class SimApp:
     def _preview_summary(gref: Dict[str, Any]) -> Dict[str, Any]:
         """Compact /api/state field. Full poses via GET /api/nav/preview."""
         if not gref:
-            return {"status": "NO_GLOBAL_PATH", "preview_m": 0.0, "kinematic_valid": None}
+            return {
+                "status": "NO_GLOBAL_PATH",
+                "preview_m": 0.0,
+                "kinematic_valid": None,
+                "kinematic_status": "NOT_VALIDATED",
+            }
         poses = gref.get("poses") or gref.get("centerline") or []
         # Keep a thinned centerline in /api/state so the main map can draw Global Reference
         # without requiring a second fetch. Cap to ~80 points.
@@ -326,16 +333,64 @@ class SimApp:
             "preview_point_count": gref.get("preview_point_count"),
             "first_turn_distance_m": gref.get("first_turn_distance_m"),
             "heading_change_deg": gref.get("heading_change_deg"),
-            "kinematic_valid": None,
+            "kinematic_valid": gref.get("kinematic_valid"),
+            "kinematic_status": gref.get("kinematic_status") or "NOT_VALIDATED",
+            "first_invalid_distance_m": gref.get("first_invalid_distance_m"),
+            "speed_limited": gref.get("speed_limited"),
+            "max_curvature": gref.get("max_curvature"),
+            "min_turn_radius_m": gref.get("min_turn_radius_m"),
             "path_revision": gref.get("path_revision"),
             "path_exists": gref.get("path_exists"),
             "path_length_m": gref.get("path_length_m"),
             "poses": thin,
             "left_edge": (gref.get("left_edge") or [])[:80],
             "right_edge": (gref.get("right_edge") or [])[:80],
-            "note": gref.get("note") or "REFERENCE_ONLY / unvalidated",
+            "note": gref.get("note") or "REFERENCE_ONLY",
             "controls_vehicle": False,
         }
+
+    @staticmethod
+    def _kinematic_summary(kv: Dict[str, Any]) -> Dict[str, Any]:
+        if not kv:
+            return {
+                "status": "NOT_VALIDATED",
+                "kinematic_valid": None,
+                "kinematic_status": "NOT_VALIDATED",
+                "controls_vehicle": False,
+            }
+        keys = (
+            "status",
+            "valid",
+            "kinematic_valid",
+            "kinematic_status",
+            "reason",
+            "primary_reason",
+            "raw_path_length_m",
+            "validated_path_length_m",
+            "max_curvature",
+            "min_turn_radius_m",
+            "reference_speed_mps",
+            "max_required_w_rad_s",
+            "max_feasible_speed_mps",
+            "min_clearance_m",
+            "swept_collision",
+            "first_invalid_index",
+            "first_invalid_distance_m",
+            "speed_limited",
+            "speed_limited_from_m",
+            "path_revision",
+            "validation_revision",
+            "validation_id",
+            "cache_hit",
+            "compute_ms",
+            "needs_reverse_maneuver",
+            "controls_vehicle",
+        )
+        out = {k: kv.get(k) for k in keys if k in kv}
+        out.setdefault("status", kv.get("kinematic_status") or "NOT_VALIDATED")
+        out.setdefault("kinematic_valid", kv.get("kinematic_valid"))
+        out.setdefault("controls_vehicle", False)
+        return out
 
     @staticmethod
     def _local_path(path: list, x: float, y: float, horizon_m: float = 5.0) -> list:

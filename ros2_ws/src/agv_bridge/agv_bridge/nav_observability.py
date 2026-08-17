@@ -27,6 +27,7 @@ CATEGORIES = (
     "NAVIGATION",
     "GLOBAL_PLANNING",
     "LOCAL_PLANNING",
+    "KINEMATIC",
     "CANDIDATE",
     "PROBE",
     "POLICY",
@@ -67,6 +68,11 @@ CRITICAL_EVENTS = frozenset(
         "GLOBAL_PREVIEW_UPDATED",
         "GLOBAL_PREVIEW_LIMITED",
         "GLOBAL_LOCAL_HORIZON_MISMATCH",
+        "KINEMATIC_VALIDATION_STARTED",
+        "KINEMATIC_VALIDATION_RESULT",
+        "KINEMATIC_PATH_REJECTED",
+        "KINEMATIC_CLEARANCE_WARNING",
+        "KINEMATIC_SPEED_LIMITED",
         "TRACE_START",
         "TRACE_UPDATE",
         "TRACE_END",
@@ -96,6 +102,11 @@ FOCUS_EVENTS = {
         "GLOBAL_PREVIEW_UPDATED",
         "GLOBAL_PREVIEW_LIMITED",
         "GLOBAL_LOCAL_HORIZON_MISMATCH",
+        "KINEMATIC_VALIDATION_STARTED",
+        "KINEMATIC_VALIDATION_RESULT",
+        "KINEMATIC_PATH_REJECTED",
+        "KINEMATIC_CLEARANCE_WARNING",
+        "KINEMATIC_SPEED_LIMITED",
     },
     "SAFETY": {"SAFETY_BLOCK", "SAFETY_CLAMP", "SAFETY_RELEASE"},
 }
@@ -841,6 +852,33 @@ class NavObservability:
                 "global_remaining_m": gref.get("remaining_m") if gref else gvl.get("global_remaining_m"),
                 "global_preview_reason": gref.get("preview_reason") if gref else gvl.get("global_preview_reason"),
                 "global_path_revision": gref.get("path_revision") if gref else gvl.get("global_path_revision"),
+                "kinematic_status": (dbg.get("kinematic_validation") or {}).get("kinematic_status")
+                if isinstance(dbg.get("kinematic_validation"), dict)
+                else gref.get("kinematic_status"),
+                "kinematic_valid": (dbg.get("kinematic_validation") or {}).get("kinematic_valid")
+                if isinstance(dbg.get("kinematic_validation"), dict)
+                else gref.get("kinematic_valid"),
+                "max_curvature": (dbg.get("kinematic_validation") or {}).get("max_curvature")
+                if isinstance(dbg.get("kinematic_validation"), dict)
+                else gref.get("max_curvature"),
+                "min_turn_radius_m": (dbg.get("kinematic_validation") or {}).get("min_turn_radius_m")
+                if isinstance(dbg.get("kinematic_validation"), dict)
+                else gref.get("min_turn_radius_m"),
+                "first_invalid_distance_m": (dbg.get("kinematic_validation") or {}).get("first_invalid_distance_m")
+                if isinstance(dbg.get("kinematic_validation"), dict)
+                else gref.get("first_invalid_distance_m"),
+                "speed_limited": (dbg.get("kinematic_validation") or {}).get("speed_limited")
+                if isinstance(dbg.get("kinematic_validation"), dict)
+                else gref.get("speed_limited"),
+                "validation_revision": (dbg.get("kinematic_validation") or {}).get("validation_revision")
+                if isinstance(dbg.get("kinematic_validation"), dict)
+                else None,
+                "cache_hit": (dbg.get("kinematic_validation") or {}).get("cache_hit")
+                if isinstance(dbg.get("kinematic_validation"), dict)
+                else None,
+                "compute_ms": (dbg.get("kinematic_validation") or {}).get("compute_ms")
+                if isinstance(dbg.get("kinematic_validation"), dict)
+                else None,
                 "local_max_distance_m": round(max_cand_dist, 3),
                 "global_vs_local": {
                     "global_preview_m": gref.get("preview_m") if gref else gvl.get("global_preview_m"),
@@ -1093,7 +1131,8 @@ class NavObservability:
                         "path_revision": rev_i,
                         "first_turn_distance_m": _rf(gref.get("first_turn_distance_m")),
                         "heading_change_deg": _rf(gref.get("heading_change_deg")),
-                        "kinematic_valid": None,
+                        "kinematic_valid": gref.get("kinematic_valid"),
+                        "kinematic_status": gref.get("kinematic_status"),
                         "status": gref.get("status"),
                     },
                     force=True,
@@ -1741,6 +1780,7 @@ def _build_decision(
     gref = gref or {}
     gvl = gvl or {}
     loc_layer = loc_layer or {}
+    kv = dbg.get("kinematic_validation") if isinstance(dbg.get("kinematic_validation"), dict) else {}
     rec_exec = recovery.get("execution") if isinstance(recovery.get("execution"), dict) else {}
     if not rec_exec:
         rec_exec = recovery.get("progress") if isinstance(recovery.get("progress"), dict) else {}
@@ -1777,8 +1817,21 @@ def _build_decision(
             "first_turn_distance_m": _rf(gref.get("first_turn_distance_m")),
             "max_heading_change_deg": _rf(gref.get("heading_change_deg") or gref.get("max_heading_change_deg")),
             "path_revision": gref.get("path_revision") or gvl.get("global_path_revision"),
-            "max_curvature": gref.get("max_curvature"),
-            "kinematic_valid": None,
+            "max_curvature": kv.get("max_curvature") if kv.get("max_curvature") is not None else gref.get("max_curvature"),
+            "min_turn_radius_m": kv.get("min_turn_radius_m") if kv.get("min_turn_radius_m") is not None else gref.get("min_turn_radius_m"),
+            "max_required_w": kv.get("max_required_w_rad_s"),
+            "max_feasible_speed_mps": kv.get("max_feasible_speed_mps"),
+            "reference_speed_mps": kv.get("reference_speed_mps"),
+            "speed_limited": kv.get("speed_limited") if "speed_limited" in kv else gref.get("speed_limited"),
+            "min_clearance_m": kv.get("min_clearance_m"),
+            "swept_collision": kv.get("swept_collision"),
+            "first_invalid_index": kv.get("first_invalid_index"),
+            "first_invalid_distance_m": kv.get("first_invalid_distance_m")
+            if kv.get("first_invalid_distance_m") is not None
+            else gref.get("first_invalid_distance_m"),
+            "validation_revision": kv.get("validation_revision"),
+            "kinematic_valid": kv.get("kinematic_valid") if "kinematic_valid" in kv else gref.get("kinematic_valid"),
+            "kinematic_status": kv.get("kinematic_status") or kv.get("status") or gref.get("kinematic_status") or "NOT_VALIDATED",
             "geometry_status": gref.get("geometry_status") or "REFERENCE_ONLY",
             "controls_vehicle": False,
         },

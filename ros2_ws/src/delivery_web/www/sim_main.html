@@ -7,7 +7,7 @@
 <script src="https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.min.js"></script>
 <script src="component_system.js?v=20260816m2"></script>
 <script src="nav_ui.js?v=20260816p1"></script>
-<script src="sim3d.js?v=20260817p0b"></script>
+<script src="sim3d.js?v=20260817p0c"></script>
 <style>
   :root {
     --bg: #f4f6f9;
@@ -283,6 +283,8 @@
     <div id="widgetLayer"></div>
     <div id="mapLegend" aria-hidden="true">
       <span><i style="background:#64748b"></i>Global Reference</span>
+      <span><i style="background:#d97706"></i>Kinematic DEGRADED</span>
+      <span><i style="background:#ef4444"></i>Kinematic INVALID</span>
       <span><i style="background:#38bdf8"></i>Local Candidate</span>
       <span><i style="background:#2563eb;height:4px"></i>Selected Local</span>
       <span><i style="background:#0f172a;width:8px;height:8px;border-radius:2px"></i>Vehicle Footprint</span>
@@ -442,6 +444,11 @@
       (nav.global_reference && nav.global_reference.preview_m != null
         ? ` · G预览${Number(nav.global_reference.preview_m).toFixed(1)}m`
         : '') +
+      (nav.kinematic_validation && nav.kinematic_validation.kinematic_status
+        ? ` · KIN:${nav.kinematic_validation.kinematic_status}`
+        : (nav.global_reference && nav.global_reference.kinematic_status
+          ? ` · KIN:${nav.global_reference.kinematic_status}`
+          : '')) +
       (nav.stop_reason && nav.stop_reason !== 'NONE' ? ` · ${nav.stop_reason}` : '') +
       (nav.stuck_s > 0.5 ? ` · stuck${Number(nav.stuck_s).toFixed(0)}s` : '') +
       (snap.debug?.diagnostics?.primary_reason && snap.debug.diagnostics.primary_reason !== 'NONE'
@@ -937,6 +944,9 @@
         <div>导航 <b>${n.mode || 'idle'}${n.pending_confirm ? ' · 待确认' : ''}</b></div>
         <div>Global预览 <b>${n.global_reference && n.global_reference.preview_m != null ? Number(n.global_reference.preview_m).toFixed(1) + 'm' : '—'}</b>
           <span style="color:var(--muted);font-size:10px"> REFERENCE</span></div>
+        <div>Kinematic <b>${(n.kinematic_validation && n.kinematic_validation.kinematic_status) || (n.global_reference && n.global_reference.kinematic_status) || '—'}</b>
+          ${((n.kinematic_validation && n.kinematic_validation.reason) || '') ? ' · ' + n.kinematic_validation.reason : ''}
+          ${(n.kinematic_validation && n.kinematic_validation.min_turn_radius_m != null) ? ' · R' + Number(n.kinematic_validation.min_turn_radius_m).toFixed(2) + 'm' : ''}</div>
         <div>Local候选 <b>${(n.local_candidates && n.local_candidates.count) || (n.candidates || []).length || 0}</b>
           · max ${(n.local_candidates && n.local_candidates.max_distance_m != null) ? Number(n.local_candidates.max_distance_m).toFixed(2) + 'm' : '—'}</div>
         <div>选中局轨 <b>${(n.selected_local && n.selected_local.candidate_id) || '—'}</b></div>

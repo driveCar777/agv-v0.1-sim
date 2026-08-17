@@ -348,8 +348,10 @@ def geometry_telemetry(geom: VehicleGeometry = DEFAULT_GEOM) -> Dict[str, Any]:
     return {
         "length_m": round(float(geom.length), 3),
         "width_m": round(float(geom.width), 3),
-        "front_overhang_m": round(float(geom.bumper_l), 3),
-        "rear_overhang_m": round(float(geom.bumper_l), 3),
+        "front_overhang_m": round(max(p[0] for p in footprint_polygon_body(geom)), 3),
+        "rear_overhang_m": round(abs(min(p[0] for p in footprint_polygon_body(geom))), 3),
+        "bumper_sample_m": round(float(geom.bumper_l), 3),
+        "polygon_half_length_m": round(0.5 * float(geom.length), 3),
         "center_offset_x_m": round(float(getattr(geom, "center_offset_x_m", 0.0) or 0.0), 3),
         "safety_margin_m": round(float(getattr(geom, "safety_margin_m", 0.08) or 0.08), 3),
         "track_width_m": getattr(geom, "track_width_m", None),

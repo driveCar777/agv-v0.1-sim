@@ -46,7 +46,8 @@ UI Local Candidate：**上 = FRONT (+body x)**，**下 = REAR**（已在 3F-CORR
 | **目标 preview** | adaptive **2–8 m**，normal ≈ **5 m** |
 | **内容** | densified centerline + yaw + first-turn metadata + lightweight display swept（REFERENCE_ONLY） |
 | **P0-A** | **仅 contract** |
-| **P0-B** | **已实现 REFERENCE ONLY**：`nav_global_preview` / `nav.global_reference`；**不**产 cmd_vel；`kinematic_valid = null`（P0-C） |
+| **P0-B** | **已实现 REFERENCE ONLY**：`nav_global_preview` / `nav.global_reference`；**不**产 cmd_vel |
+| **P0-C** | **已实现 telemetry-only validator**：`nav_kinematic` / `nav.kinematic_validation`；`kinematic_valid` = true/false/null；**不**改 preview_m；**不** SAFE_STOP |
 | **不是** | Local Physical Trajectory；不是 Safety；不是认证可执行轨迹 |
 
 ---
@@ -123,7 +124,8 @@ local_maneuver._footprint_points
 |--|--|
 | **定义** | Global（或候选）路径在车辆 κ / ω / footprint swept 下可执行 |
 | **P0-A** | **不实现** validator（P0-C） |
-| **依赖** | 本阶段提供的 swept / footprint API |
+| **P0-C** | **已实现** `KinematicPathValidator`：densify + κ=Δyaw/Δs + circular fillet + v=ω/κ speed profile + P0-A swept；telemetry only |
+| **依赖** | P0-A swept / footprint API；控制限幅引用既有 `max_vx` / `wz_max=0.42` / `v_min=0.04`（不发明 MAX_W） |
 
 ---
 
