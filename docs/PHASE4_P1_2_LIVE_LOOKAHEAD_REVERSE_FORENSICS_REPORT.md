@@ -2,7 +2,7 @@
 
 **Repo:** https://github.com/driveCar777/agv-v0.1-sim  
 **Baseline:** P1-2-OBSERVE `3aaa317` / forensics `bbef47a`  
-**LIVE trace:** `logs/live_lookahead_reverse/live_forensics_20260817_154345.jsonl`  
+**LIVE trace commit:** `25653215fbc6fb64d0a33555ff2a2078d3539bd5`  
 **Status:** `P1-2-LIVE = PARTIAL` (core lookahead + recovery LIVE; bypass/turnback not reproduced in window)
 
 ---
