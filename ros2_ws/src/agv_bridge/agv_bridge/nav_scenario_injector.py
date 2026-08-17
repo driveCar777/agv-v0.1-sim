@@ -329,7 +329,7 @@ SCENARIOS: Dict[str, ScenarioSpec] = {
         goal=dict(M32_OPEN_GOAL),
         map_scene="m32_open_straight",
         inject_delay_s=2.0,
-        inject_fn=_route_inject_ahead(M32_OPEN_START, M32_OPEN_GOAL, 4.0, "static_left", "obs_open_l"),
+        inject_fn=_route_inject_ahead(M32_OPEN_START, M32_OPEN_GOAL, 2.3, "static_left", "obs_open_l"),
     ),
     "OBS-OPEN-RIGHT": ScenarioSpec(
         scene_id="OBS-OPEN-RIGHT",
@@ -339,7 +339,7 @@ SCENARIOS: Dict[str, ScenarioSpec] = {
         goal=dict(M32_OPEN_GOAL),
         map_scene="m32_open_straight",
         inject_delay_s=2.0,
-        inject_fn=_route_inject_ahead(M32_OPEN_START, M32_OPEN_GOAL, 4.0, "static_right", "obs_open_r"),
+        inject_fn=_route_inject_ahead(M32_OPEN_START, M32_OPEN_GOAL, 2.3, "static_right", "obs_open_r"),
     ),
     "OBS-OPEN-BOTH-BLOCKED": ScenarioSpec(
         scene_id="OBS-OPEN-BOTH-BLOCKED",
@@ -349,7 +349,7 @@ SCENARIOS: Dict[str, ScenarioSpec] = {
         goal=dict(M32_OPEN_GOAL),
         map_scene="m32_open_straight",
         inject_delay_s=2.0,
-        inject_fn=_route_inject_ahead(M32_OPEN_START, M32_OPEN_GOAL, 3.5, "both", "obs_open_bb"),
+        inject_fn=_route_inject_ahead(M32_OPEN_START, M32_OPEN_GOAL, 2.1, "both", "obs_open_bb"),
         expect_navigation_failed=True,
     ),
     "OBS-OPEN-DYNAMIC-CROSS": ScenarioSpec(

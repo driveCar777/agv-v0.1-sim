@@ -68,33 +68,20 @@ def _dig(d: dict, *keys, default=None):
 
 
 def _sample_v02(client: NavLiveClient, seq: int, scene: str, setup_meta: dict) -> dict:
+    # Light sample: state + obstacle-preview only. Extra debug/diagnostics HTTP
+    # starves the single-process physics loop (dt=0.05 applied per overrun tick).
     st = client.get("/api/state")
-    dbg_raw = {}
     op = {}
-    diag = {}
-    safety = {}
-    recovery = {}
-    try:
-        dbg_raw = client.get("/api/nav/debug")
-    except Exception:
-        pass
-    dbg = dbg_raw.get("debug") if isinstance(dbg_raw.get("debug"), dict) else dbg_raw
     try:
         op = client.get("/api/nav/obstacle-preview")
     except Exception:
         pass
-    try:
-        diag = client.get("/api/logs/diagnostics?window_s=5")
-    except Exception:
-        pass
-    try:
-        safety = client.get("/api/nav/safety")
-    except Exception:
-        safety = st.get("safety") or _dig(dbg, "safety") or {}
-    try:
-        recovery = client.get("/api/nav/recovery")
-    except Exception:
-        recovery = _dig(dbg, "execution_recovery") or _dig(dbg, "recovery") or {}
+    dbg = st.get("debug") if isinstance(st.get("debug"), dict) else {}
+    if not dbg:
+        dbg = {}
+    safety = st.get("safety") or _dig(dbg, "safety") or {}
+    recovery = _dig(dbg, "execution_recovery") or _dig(dbg, "recovery") or {}
+    diag = {}
 
     nav = st.get("nav") or {}
     agv = st.get("agv") or {}
@@ -128,7 +115,17 @@ def _sample_v02(client: NavLiveClient, seq: int, scene: str, setup_meta: dict) -
         "behavior_state": _dig(dbg, "nav_policy", "state") or nav.get("policy_state") or status.get("policy_state"),
         "maneuver_mode": _dig(dbg, "maneuver", "mode") or nav.get("maneuver_mode") or status.get("maneuver_mode"),
         "avoidance_phase": op.get("avoidance_phase") or _dig(dbg, "nav_policy", "avoidance_phase", "phase"),
+        "readiness_signal": op.get("readiness_signal") or op.get("signal"),
         "probe_confidence": op.get("probe_confidence"),
+        "probe_confidence_left": op.get("probe_confidence_left") or _dig(op, "side_probe", "left_confidence"),
+        "probe_confidence_right": op.get("probe_confidence_right") or _dig(op, "side_probe", "right_confidence"),
+        "left_valid": op.get("left_valid") if op.get("left_valid") is not None else _dig(op, "side_probe", "left_valid"),
+        "right_valid": op.get("right_valid") if op.get("right_valid") is not None else _dig(op, "side_probe", "right_valid"),
+        "preferred_side": _dig(op, "side_probe", "preferred_side") or op.get("preferred_side"),
+        "commit_ready": op.get("commit_ready") if op.get("commit_ready") is not None else _dig(op, "side_probe", "commit_ready"),
+        "d_detection_m": op.get("d_detection_m"),
+        "d_probe_start_m": op.get("d_probe_start_m"),
+        "d_commit_m": op.get("d_commit_m") or op.get("required_avoidance_distance_m") or op.get("maneuver_start_distance_m"),
         "committed_side": op.get("committed_side") or _dig(dbg, "nav_policy", "committed_side"),
         "execution_corridor": ec if ec else None,
         "goal": goal,
@@ -162,7 +159,7 @@ def _sample_v02(client: NavLiveClient, seq: int, scene: str, setup_meta: dict) -
         "recovery_result": recovery.get("recovery_result") or recovery.get("result"),
         "stop_reason": nav.get("stop_reason") or status.get("stop_reason"),
         "nav_ui_severity": nav.get("nav_ui_severity") or safety.get("nav_ui_severity") or status.get("nav_ui_severity"),
-        "sensor_health": diag.get("sensor_health") or "UNKNOWN",
+        "sensor_health": diag.get("sensor_health") or st.get("sensor_health") or "UNKNOWN",
         "localization_health": diag.get("localization_health") or ("OK" if float(agv.get("confidence") or 0) > 0.5 else "DEGRADED"),
         "selected_candidate": lp.get("selected_candidate") or dbg.get("local_planner", {}).get("selected_candidate"),
         "trajectory_omega_sign": _omega_sign(nav.get("mppi_w") or vc.get("requested_omega")),
@@ -252,10 +249,12 @@ def run_scene(
     prev_row: Optional[dict] = None
     t0 = time.time()
     injected = False
-    n = max(1, int(seconds * hz))
+    period = 1.0 / max(0.2, hz)
+    deadline = t0 + max(1.0, seconds)
 
-    for _ in range(n):
-        elapsed = time.time() - t0
+    while time.time() < deadline:
+        tick_start = time.time()
+        elapsed = tick_start - t0
         if (not injected) and spec.inject_fn and elapsed >= spec.inject_delay_s:
             pose = client.get("/api/state").get("agv") or {}
             px, py = float(pose.get("x") or 0), float(pose.get("y") or 0)
@@ -286,7 +285,9 @@ def run_scene(
         except (urllib.error.URLError, TimeoutError, json.JSONDecodeError, OSError) as exc:
             rows.append({"ts": time.time(), "seq": seq, "scene": scene_id, "error": str(exc), "schema": "navigation_v0.2_trace/2"})
             seq += 1
-        time.sleep(1.0 / hz)
+        remain = period - (time.time() - tick_start)
+        if remain > 0:
+            time.sleep(remain)
 
     return rows, seq, setup, f"{tag}-{stamp}.jsonl"
 

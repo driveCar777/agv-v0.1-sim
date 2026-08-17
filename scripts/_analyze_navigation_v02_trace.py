@@ -22,6 +22,7 @@ TIMELINE_KEYS = (
     "T_preview",
     "T_probe",
     "T_commit",
+    "T_corridor",
     "T_first_clearance_drop",
     "T_first_constraint_failure",
     "T_first_mppi_infeasible",
@@ -105,12 +106,15 @@ def _find_timeline(rows: List[dict]) -> Dict[str, Optional[dict]]:
         if r.get("future_collision") or (_f(r.get("first_collision_m"), 99) < 8.0):
             _mark(tl, "T_preview", r)
         ap = str(r.get("avoidance_phase") or "").upper()
-        if "PROBE" in ap or r.get("probe_confidence"):
+        beh = str(r.get("behavior_state") or "").upper()
+        if ap == "SIDE_PROBE" or beh == "SIDE_PROBE":
             _mark(tl, "T_probe", r)
         cs = str(r.get("committed_side") or "").upper()
-        if cs in ("LEFT", "RIGHT") or "COMMIT" in ap:
+        if ap == "SIDE_COMMIT":
             _mark(tl, "T_commit", r)
             saw_commit = True
+        if ap == "SIDE_COMMIT" or (isinstance(r.get("execution_corridor"), dict) and r["execution_corridor"].get("active")):
+            _mark(tl, "T_corridor", r)
         fp = r.get("footprint_clearance_m")
         if fp is not None and _f(fp, 99) < 0.55:
             _mark(tl, "T_first_clearance_drop", r)
