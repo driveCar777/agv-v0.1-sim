@@ -17,7 +17,8 @@ from agv_bridge.nav_footprint import (
     trajectory_collision,
     trajectory_min_clearance,
 )
-from agv_bridge.nav_geometry import DEFAULT_GEOM, VehicleGeometry, get_vehicle_model
+from agv_bridge.nav_execution_corridor import ExecutionCorridor, corridor_allows_omega_sign
+from agv_bridge.nav_geometry import DEFAULT_GEOM, BrakingModel, VehicleGeometry, get_vehicle_model
 
 PoseLike = Any
 CollideFn = Callable[[float, float], bool]
@@ -31,6 +32,8 @@ REASON_VX_LIMIT = "VX_LIMIT"
 REASON_W_LIMIT = "OMEGA_LIMIT"
 REASON_AX_LIMIT = "ACCEL_LIMIT"
 REASON_CORRIDOR = "CORRIDOR_SIDE_BLOCKED"
+REASON_BRAKING = "BRAKING_INFEASIBLE"
+REASON_BRAKING_UNAVAILABLE = "BRAKING_MODEL_UNAVAILABLE"
 REASON_UNKNOWN = "UNKNOWN"
 
 
@@ -124,6 +127,55 @@ def _infer_dynamics(poses: Sequence[PoseLike], dt: float) -> tuple[float, float,
     return max_abs_vx, max_abs_w, max_abs_ax
 
 
+def _corridor_rejects_poses(
+    poses: Sequence[PoseLike],
+    execution_corridor: Optional[ExecutionCorridor],
+    dt: float,
+) -> bool:
+    if execution_corridor is None or not execution_corridor.active or not execution_corridor.constrains_side():
+        return False
+    prev_yaw: Optional[float] = None
+    prev_raw: Optional[PoseLike] = None
+    for raw in poses:
+        _, _, yaw = _pose_xy_yaw(raw)
+        seg_dt = _segment_dt(prev_raw, raw, dt) if prev_raw is not None else max(1e-3, float(dt))
+        if prev_yaw is not None:
+            dyaw = yaw - prev_yaw
+            while dyaw > math.pi:
+                dyaw -= 2.0 * math.pi
+            while dyaw < -math.pi:
+                dyaw += 2.0 * math.pi
+            omega = dyaw / seg_dt
+            if not corridor_allows_omega_sign(execution_corridor, omega):
+                return True
+        prev_yaw = yaw
+        prev_raw = raw
+    return False
+
+
+def braking_feasible(
+    vx_mps: float,
+    clearance_m: float,
+    braking: BrakingModel,
+    *,
+    hard_stop_m: float,
+) -> tuple[bool, str]:
+    """Return (feasible, reason). Unknown decel → unavailable reason, not silent pass."""
+    v = max(0.0, float(vx_mps))
+    if v < 0.04:
+        return True, REASON_NONE
+    stop_dist = braking.stopping_distance_m(v)
+    if stop_dist is None:
+        # Conservative: require at least front_stop without inventing decel
+        if clearance_m < hard_stop_m:
+            return False, REASON_BRAKING_UNAVAILABLE
+        return True, REASON_BRAKING_UNAVAILABLE
+    required = stop_dist + hard_stop_m * 0.25
+    if clearance_m < required:
+        return False, REASON_BRAKING
+    return True, REASON_NONE
+
+
 def validate_trajectory(
     poses: Sequence[PoseLike],
     *,
@@ -133,6 +185,8 @@ def validate_trajectory(
     margin_m: Optional[float] = None,
     dt: float = 0.1,
     enforce_limits: bool = True,
+    execution_corridor: Optional[ExecutionCorridor] = None,
+    braking: Optional[BrakingModel] = None,
 ) -> TrajectoryValidationResult:
     res = TrajectoryValidationResult(pose_count=len(poses))
     if not poses:
@@ -160,6 +214,9 @@ def validate_trajectory(
     res.max_abs_w = max_abs_w
     res.max_abs_ax = max_abs_ax
 
+    if execution_corridor is not None and _corridor_rejects_poses(poses, execution_corridor, dt):
+        res.reject(REASON_CORRIDOR)
+
     if enforce_limits:
         if max_abs_vx > float(limits.max_vx_mps) + 1e-6:
             res.reject(REASON_VX_LIMIT)
@@ -167,6 +224,13 @@ def validate_trajectory(
             res.reject(REASON_W_LIMIT)
         if max_abs_ax > float(limits.max_accel_mps2) + 1e-6:
             res.reject(REASON_AX_LIMIT)
+
+    if braking is not None and max_abs_vx > 0.04:
+        min_cl = res.minimum_clearance.minimum_clearance_m
+        clr = min_cl if min_cl is not None else (res.current_clearance.minimum_clearance_m or 99.0)
+        ok, br_reason = braking_feasible(max_abs_vx, float(clr), braking, hard_stop_m=float(geom.front_stop_m))
+        if not ok:
+            res.reject(br_reason)
 
     if not res.valid and res.reason == REASON_NONE:
         res.reason = res.reasons[0] if res.reasons else REASON_UNKNOWN

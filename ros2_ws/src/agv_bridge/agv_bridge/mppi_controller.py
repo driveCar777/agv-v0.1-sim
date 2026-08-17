@@ -15,8 +15,8 @@ from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 from agv_bridge.nav_execution_corridor import ExecutionCorridor, corridor_allows_omega_sign
-from agv_bridge.nav_geometry import DEFAULT_GEOM, VehicleGeometry
-from agv_bridge.nav_trajectory_validator import REASON_CORRIDOR, validate_trajectory
+from agv_bridge.nav_geometry import DEFAULT_GEOM, VehicleGeometry, get_vehicle_model
+from agv_bridge.nav_trajectory_validator import REASON_COLLISION, REASON_CORRIDOR, validate_trajectory
 
 Pt = Tuple[float, float]
 CollideFn = Callable[[float, float], bool]
@@ -270,7 +270,7 @@ class DiffDriveMppi:
 
     def _score(
         self,
-        path: List[Pt],
+        body_poses: Sequence[Dict[str, float]],
         vx_seq: Sequence[float],
         w_seq: Sequence[float],
         global_path: List[Pt],
@@ -280,27 +280,36 @@ class DiffDriveMppi:
         front_cost_m: float,
         path_follow_weight: float = 5.0,
         target_vx: Optional[float] = None,
+        clearance_at: Optional[Callable[[float, float], float]] = None,
     ) -> Tuple[float, str, Dict[str, Any]]:
-        """Return (cost, mode, debug_meta). path_follow_weight from NavigationPolicy profile.
-
-        target_vx comes from SpeedPolicy (OPEN cruise default 0.30). Not SIDE_VX / not 0.22.
-        """
-        if len(path) < 2:
+        """Return (cost, mode, debug_meta). Footprint collision via TrajectoryValidator."""
+        if len(body_poses) < 2:
             return 1e6, "invalid", {"cost_breakdown": {}, "collision": True, "first_collision": None}
+        validation = validate_trajectory(
+            body_poses,
+            collide=collide,
+            clearance_at=clearance_at,
+            geom=self.geom,
+            margin_m=float(self.geom.safety_margin_m),
+            dt=self.model_dt,
+            enforce_limits=False,
+        )
         cost = 0.0
         collision_cost = 0.0
         first_collision = None
-        for ti, p in enumerate(path[1::2]):
-            if collide(p[0], p[1]):
-                collision_cost = 700.0
-                cost += collision_cost
+        if not validation.valid and validation.reason in (REASON_COLLISION, "CLEARANCE_TOO_LOW"):
+            collision_cost = 700.0
+            cost += collision_cost
+            fc = validation.collision
+            if fc.collision and fc.first_pose is not None:
                 first_collision = {
-                    "t": round((ti * 2 + 1) * self.model_dt, 3),
-                    "x": round(p[0], 3),
-                    "y": round(p[1], 3),
-                    "step": ti * 2 + 1,
+                    "t": round(float(fc.collision_time_s or 0.0), 3),
+                    "x": round(float(fc.first_pose.get("x", 0.0)), 3),
+                    "y": round(float(fc.first_pose.get("y", 0.0)), 3),
+                    "step": fc.first_index,
+                    "region": fc.collision_region,
                 }
-                break
+        path = [(float(p["x"]), float(p["y"])) for p in body_poses]
         gdev = 0.0
         if global_path:
             step = max(1, len(global_path) // 24)
@@ -344,12 +353,14 @@ class DiffDriveMppi:
         # heading proxy: mean_w already; expose alpha-like via end displacement
         heading_cost = 0.0
         meta = {
-            "collision": first_collision is not None,
+            "collision": first_collision is not None or validation.collision.collision,
             "first_collision": first_collision,
             "global_path_error": round(gdev, 4),
             "goal_error": round(d1, 4),
             "jerk_w": round(jerk_w, 4),
-            "clearance_m": None,
+            "clearance_m": validation.minimum_clearance.minimum_clearance_m,
+            "footprint_validated": True,
+            "validator_reason": validation.reason,
             "cost_breakdown": {
                 "collision_cost": round(collision_cost, 3),
                 "front_obstacle_cost": round(front_obstacle_cost, 3),
@@ -676,11 +687,8 @@ class DiffDriveMppi:
                 margin_m=float(self.geom.safety_margin_m),
                 dt=self.model_dt,
                 enforce_limits=False,
+                execution_corridor=execution_corridor,
             )
-            if execution_corridor is not None and execution_corridor.active and execution_corridor.constrains_side():
-                w0 = w_seq[0] if w_seq else 0.0
-                if not corridor_allows_omega_sign(execution_corridor, w0):
-                    validation.reject(REASON_CORRIDOR)
             if not validation.valid:
                 reason = validation.reason
                 if reason == "FOOTPRINT_COLLISION":
@@ -711,7 +719,7 @@ class DiffDriveMppi:
                 )
                 continue
             cost, smode, meta = self._score(
-                body,
+                body_poses,
                 vx_seq,
                 w_seq,
                 follow_path,
@@ -721,6 +729,7 @@ class DiffDriveMppi:
                 self.geom.front_cost_m,
                 path_follow_weight=getattr(self, "_path_follow_weight", 5.0),
                 target_vx=tgt,
+                clearance_at=clearance_at,
             )
             valid_candidate_count += 1
             samples.append(
@@ -837,6 +846,46 @@ class DiffDriveMppi:
             dt=self.model_dt,
         )
 
+        # M2-C: final selected trajectory gate (MPPI output ≠ safety truth)
+        final_poses = self._rollout_pose_sequence(x, y, yaw, vx_seq_band, w_seq_band)
+        braking = get_vehicle_model().braking
+        final_validation = validate_trajectory(
+            final_poses,
+            collide=collide,
+            clearance_at=clearance_at,
+            geom=self.geom,
+            margin_m=float(self.geom.safety_margin_m),
+            dt=self.model_dt,
+            enforce_limits=True,
+            execution_corridor=execution_corridor,
+            braking=braking,
+        )
+        if not final_validation.valid:
+            self._cmd_vx = 0.0
+            self._cmd_w = 0.0
+            self._last_meta = {
+                "batch": batch,
+                "time_steps": n,
+                "model_dt": self.model_dt,
+                "candidate_count": candidate_count,
+                "valid_candidate_count": valid_candidate_count,
+                "collision_rejected_count": collision_rejected_count,
+                "clearance_rejected_count": clearance_rejected_count,
+                "constraint_rejected_count": constraint_rejected_count + 1,
+                "failure_reason": "MPPI_NO_FEASIBLE_TRAJECTORY",
+                "final_validator_reason": final_validation.reason,
+                "execution_corridor": None if execution_corridor is None else execution_corridor.to_dict(),
+            }
+            return MppiResult(
+                vx=0.0,
+                w=0.0,
+                best_path=[(x, y)],
+                candidates=[],
+                confidence=0.0,
+                mode="invalid",
+                control_mode="mppi",
+            )
+
         same = [s for s in ranked if s["mode"] == cmd_mode]
         other = [s for s in ranked if s["mode"] != cmd_mode]
         ordered = (same + other)[: self.top_k] or ranked[: self.top_k]
@@ -913,6 +962,8 @@ class DiffDriveMppi:
             "collision_rejected_count": int(collision_rejected_count),
             "clearance_rejected_count": int(clearance_rejected_count),
             "constraint_rejected_count": int(constraint_rejected_count),
+            "final_validator_valid": True,
+            "predicted_min_clearance_m": final_validation.minimum_clearance.minimum_clearance_m,
             "selected_candidate_index": int(candidates[0]["id"]) if candidates else None,
             "selected_vx": round(float(vx_cmd), 4),
             "selected_omega": round(float(w_cmd), 4),
