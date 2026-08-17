@@ -1,0 +1,33 @@
+vehicle_model:
+  name: AGV_V0_2_BASELINE
+  geometry:
+    length_m: 1.05
+    width_m: 0.55
+    base_link_offset_x_m: 0.0
+    base_link_offset_y_m: 0.0
+    front_overhang_m: 0.55
+    rear_overhang_m: 0.55
+    bumper_sample_offset_m: 0.55
+    footprint_model: polygon
+    source:
+      length_m: SPEC
+      width_m: SPEC
+      base_link_offset_x_m: CALIBRATION_REQUIRED
+      base_link_offset_y_m: CALIBRATION_REQUIRED
+      front_overhang_m: DERIVED
+      rear_overhang_m: DERIVED
+  limits:
+    max_vx_mps: 0.40
+    min_vx_mps: -0.18
+    max_accel_mps2: 0.90
+    max_decel_mps2: null
+    max_omega_rad_s: 0.45
+    max_alpha_rad_s2: 0.55
+    source:
+      max_vx_mps: ENGINEERING_ASSUMPTION
+      min_vx_mps: ENGINEERING_ASSUMPTION
+      max_accel_mps2: ENGINEERING_ASSUMPTION
+      max_decel_mps2: CALIBRATION_REQUIRED
+      max_omega_rad_s: ENGINEERING_ASSUMPTION
+      max_alpha_rad_s2: ENGINEERING_ASSUMPTION
+  calibration_status: PARTIAL
