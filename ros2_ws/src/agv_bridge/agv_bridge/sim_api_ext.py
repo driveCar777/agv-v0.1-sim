@@ -18,7 +18,26 @@ from agv_bridge.nav_geometry import (
     MAX_RECOVERY_ATTEMPTS,
     STUCK_PROGRESS_MIN_M,
     STUCK_REVERSE_TRIGGER_S,
+    get_vehicle_model,
 )
+from agv_bridge.nav_planner_state import (
+    LOCAL_RECOVERY,
+    NAVIGATION_FAILED,
+    PLANNER_SAFE_STOP,
+    REASON_BRAKING_LIMIT,
+    REASON_BRAKING_UNAVAILABLE,
+    REASON_LOC_INVALID,
+    REASON_MPPI_INFEASIBLE,
+    REASON_NAV_FAILED,
+    REASON_RECOVERY_ACTIVE,
+    REASON_RECOVERY_EXHAUSTED,
+    REASON_STALE_SENSOR,
+    STOP_NAV_FAILED,
+    STOP_RECOVERY,
+    STOP_SAFE,
+    ui_severity,
+)
+from agv_bridge.nav_trajectory_validator import braking_feasible
 from agv_bridge.nav_models import GlobalPlannerModel, LocalMppiModel
 from agv_bridge.path_progress import ProgressTracker
 from agv_bridge.sim_world import get_world
@@ -44,6 +63,13 @@ SAFE_VX_EMERGENCY = "EMERGENCY_STOP"
 SAFE_VX_FAILED = "PLANNER_FAILED"
 SAFE_VX_FP = "FOOTPRINT_CLEARANCE_VETO"
 SAFE_VX_MPPI = "MPPI_NO_FEASIBLE_TRAJECTORY"
+SAFE_VX_RECOVERY = "RECOVERY_ACTIVE"
+SAFE_VX_BRAKING = "BRAKING_LIMIT"
+SAFE_VX_BRAKING_NA = "BRAKING_MODEL_UNAVAILABLE"
+SAFE_VX_STALE = "STALE_SENSOR"
+SAFE_VX_LOC = "LOCALIZATION_INVALID"
+SAFE_VX_NAV_FAILED = "NAVIGATION_FAILED"
+SAFE_VX_RECOVERY_EX = "RECOVERY_EXHAUSTED"
 
 
 def patch_mock_state(state) -> None:
@@ -66,6 +92,12 @@ def patch_mock_state(state) -> None:
     state._debug_snapshot: Dict[str, Any] = {}
     state._physical_corridor: Dict[str, Any] = {}
     state._safe_vx_reason = SAFE_VX_NORMAL
+    state._planner_state = "NORMAL"
+    state._planner_failure_reason = ""
+    state._recovery_state = "NONE"
+    state._recovery_attempt = 0
+    state._predicted_min_clearance_m = None
+    state._footprint_clearance_m = None
 
     state._cmd_vx = 0.0
     state._cmd_vy = 0.0
@@ -294,22 +326,39 @@ def patch_mock_state(state) -> None:
         front_near: float,
         rear_near: float,
         footprint_clearance: Optional[float],
+        predicted_min_clearance: Optional[float],
         mppi_failure_reason: Optional[str],
         colliding: bool,
         emergency: bool,
         phase: str,
+        planner_state: str,
+        state_vx: float,
+        sensor_stale: bool = False,
+        localization_invalid: bool = False,
     ) -> Tuple[float, float, str, str]:
-        """最终安全裁决。返回 (vx, w, stop_reason)。所有 Maneuver 必经此门。"""
+        """最终安全裁决。返回 (vx, w, stop_reason, safe_vx_reason)。"""
         reason = STOP_NONE
         safe_vx_reason = SAFE_VX_NORMAL
         vx, w = cmd_vx, cmd_w
         turning = phase in ("align", "turn_in_place", "reposition", "local_avoid")
+        braking = get_vehicle_model().braking
+
         if emergency:
             return 0.0, 0.0, STOP_EMERGENCY, SAFE_VX_EMERGENCY
-        if phase == "safe_stop":
-            return 0.0, 0.0, STOP_FAILED, SAFE_VX_FAILED
+        if sensor_stale:
+            return 0.0, 0.0, STOP_SAFE, SAFE_VX_STALE
+        if localization_invalid:
+            return 0.0, 0.0, STOP_SAFE, SAFE_VX_LOC
+        if planner_state == NAVIGATION_FAILED:
+            return 0.0, 0.0, STOP_NAV_FAILED, SAFE_VX_NAV_FAILED
+        if planner_state == PLANNER_SAFE_STOP:
+            return 0.0, 0.0, STOP_SAFE, SAFE_VX_RECOVERY_EX
+        if planner_state == LOCAL_RECOVERY:
+            safe_vx_reason = SAFE_VX_RECOVERY
+            if vx > 0.0:
+                vx = min(vx, geom.max_vx * 0.55)
         if mppi_failure_reason == SAFE_VX_MPPI:
-            return 0.0, 0.0, STOP_NONE, SAFE_VX_MPPI
+            return 0.0, 0.0, STOP_RECOVERY, SAFE_VX_MPPI
         if colliding:
             # SIL: do not invent reverse during align/turn; hard stop and let Maneuver decide
             if turning:
@@ -321,6 +370,21 @@ def patch_mock_state(state) -> None:
             # already reversing: keep rear gate below
         if footprint_clearance is not None and footprint_clearance < geom.safety_margin_m:
             return 0.0, 0.0, STOP_FRONT, SAFE_VX_FP
+        clr_for_brake = predicted_min_clearance if predicted_min_clearance is not None else front_near
+        if vx > 0.04:
+            ok, br_reason = braking_feasible(
+                max(vx, abs(state_vx)),
+                float(clr_for_brake),
+                braking,
+                hard_stop_m=geom.front_stop_m,
+            )
+            if not ok:
+                if br_reason == REASON_BRAKING_UNAVAILABLE:
+                    cap = max(0.04, min(vx, front_near * 0.35))
+                    if cap < vx - 0.02:
+                        return cap, w * 0.5, STOP_NONE, SAFE_VX_BRAKING_NA
+                else:
+                    return 0.0, w * 0.2, STOP_FRONT, SAFE_VX_BRAKING
         if vx < 0 and rear_near < geom.rear_stop_m:
             return 0.0, 0.0, STOP_REAR, SAFE_VX_REAR
         # Front obstacle: allow pure yaw during align/turn (vx≈0) if not colliding
@@ -562,6 +626,14 @@ def patch_mock_state(state) -> None:
             path_rev = int(getattr(state, "_global_path_revision", 0) or 0)
             stuck_s = float(state._stuck_s)
             recovery_attempts = int(state._recovery_attempts)
+            safe_vx_reason = str(getattr(state, "_safe_vx_reason", SAFE_VX_NORMAL) or SAFE_VX_NORMAL)
+            planner_state = str(getattr(state, "_planner_state", "NORMAL") or "NORMAL")
+            planner_failure_reason = str(getattr(state, "_planner_failure_reason", "") or "")
+            recovery_state = str(getattr(state, "_recovery_state", "NONE") or "NONE")
+            recovery_attempt = int(getattr(state, "_recovery_attempt", 0) or 0)
+            footprint_clearance_m = getattr(state, "_footprint_clearance_m", None)
+            predicted_min_clearance_m = getattr(state, "_predicted_min_clearance_m", None)
+            nav_ui_severity = str(getattr(state, "_nav_ui_severity", "NORMAL") or "NORMAL")
             global_n = int(state._global_replan_count)
             local_n = int(state._local_replan_count)
             confidence = float(state._best_confidence)
@@ -689,6 +761,14 @@ def patch_mock_state(state) -> None:
                 "local_decision": maneuver.get("decision"),
                 "policy_state": (nav_policy.get("state") if nav_policy else None),
                 "policy_behavior": (nav_policy.get("behavior") if nav_policy else None),
+                "safe_vx_reason": safe_vx_reason,
+                "planner_state": planner_state,
+                "planner_failure_reason": planner_failure_reason,
+                "recovery_state": recovery_state,
+                "recovery_attempt": recovery_attempt,
+                "footprint_clearance_m": footprint_clearance_m,
+                "predicted_min_clearance_m": predicted_min_clearance_m,
+                "nav_ui_severity": nav_ui_severity,
                 "path_follow_weight": ((nav_policy.get("decision") or {}).get("path_follow_weight") if nav_policy else None),
                 "local_deviation": ((nav_policy.get("decision") or {}).get("corridor") or {}).get("lateral_error") if nav_policy else None,
                 "fwd_cost": ((maneuver.get("local_compare") or {}).get("snapshot") or {}).get("forward_cost"),
@@ -1469,10 +1549,11 @@ def patch_mock_state(state) -> None:
                             MAX_RECOVERY_ATTEMPTS, local_mppi.recovery_attempts + 1
                         )
                         if local_mppi.recovery_attempts >= MAX_RECOVERY_ATTEMPTS:
+                            local_mppi.planner_state = NAVIGATION_FAILED
                             local_mppi.phase = "safe_stop"
                             if man:
                                 man._set_mode("SAFE_STOP", now, "recovery_exhausted")
-                            stop_reason = STOP_FAILED
+                            stop_reason = STOP_NAV_FAILED
                     else:
                         # Do NOT force begin_reverse_escape here — let Maneuver decide on next step
                         _log_decision(
@@ -1760,10 +1841,12 @@ def patch_mock_state(state) -> None:
             cmd_before_vx, cmd_before_w = mppi_vx, mppi_w
             mppi_failure_reason = None
             fp_clearance_now = None
+            predicted_min_clr = None
             try:
                 meta = dict(getattr(local_mppi.mppi, "_last_meta", {}) or {})
                 if str(meta.get("failure_reason") or "") == SAFE_VX_MPPI:
                     mppi_failure_reason = SAFE_VX_MPPI
+                predicted_min_clr = meta.get("predicted_min_clearance_m")
             except Exception:
                 mppi_failure_reason = None
             try:
@@ -1772,22 +1855,26 @@ def patch_mock_state(state) -> None:
                     fp_clearance_now = (corr.metadata or {}).get("current_footprint_clearance_m")
             except Exception:
                 fp_clearance_now = None
+            planner_state = str(getattr(local_mppi, "planner_state", "NORMAL") or "NORMAL")
             safe_vx, safe_w, safety_reason, safe_vx_reason = apply_safety(
                 mppi_vx,
                 mppi_w,
                 front_near=front_near,
                 rear_near=rear_near,
                 footprint_clearance=fp_clearance_now,
+                predicted_min_clearance=predicted_min_clr,
                 mppi_failure_reason=mppi_failure_reason,
                 colliding=colliding,
                 emergency=emergency,
                 phase=local_mppi.phase,
+                planner_state=planner_state,
+                state_vx=float(getattr(state, "vx", 0.0) or 0.0),
             )
             if safety_reason != STOP_NONE:
                 stop_reason = safety_reason
-            if local_mppi.phase == "safe_stop":
+            if planner_state == NAVIGATION_FAILED:
                 safe_vx = safe_w = 0.0
-                stop_reason = STOP_FAILED
+                stop_reason = STOP_NAV_FAILED
 
             with state.lock:
                 state._last_safety_zero = abs(safe_vx) < 1e-4 and abs(safe_w) < 1e-4
@@ -1845,6 +1932,25 @@ def patch_mock_state(state) -> None:
                 state._cmd_vx_after_safety = float(safe_vx)
                 state._cmd_w_after_safety = float(safe_w)
                 state._safe_vx_reason = str(safe_vx_reason)
+                state._planner_state = planner_state
+                state._planner_failure_reason = str(
+                    getattr(local_mppi, "planner_failure_reason", "") or ""
+                )
+                rp = getattr(local_mppi, "last_recovery_plan", None)
+                rs = getattr(local_mppi, "recovery_planner", None)
+                state._recovery_state = (
+                    rp.action if rp is not None else (rs.state.current_action if rs else "NONE")
+                )
+                state._recovery_attempt = int(
+                    rs.state.attempt_count if rs is not None else getattr(local_mppi, "recovery_attempts", 0)
+                )
+                state._predicted_min_clearance_m = predicted_min_clr
+                state._footprint_clearance_m = fp_clearance_now
+                state._nav_ui_severity = ui_severity(
+                    planner_state=planner_state,
+                    safe_vx_reason=str(safe_vx_reason),
+                    stop_reason=str(stop_reason),
+                )
                 state._front_near = float(front_near)
                 state._rear_near = float(rear_near)
                 state._collision = bool(colliding)
