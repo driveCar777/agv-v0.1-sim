@@ -397,14 +397,18 @@ def collect_local_candidates(
                     "invalid_reason": None if valid else (v.get("reason") or "UNKNOWN"),
                     "score": v.get("total_cost"),
                     "score_breakdown": v.get("cost_breakdown") or {},
-                    "distance_m": round(dist, 3) if dist else v.get("path_progress_gain"),
+                    "distance_m": round(float(v["distance_m"]), 3)
+                    if v.get("distance_m") is not None
+                    else (round(dist, 3) if dist else v.get("path_progress_gain")),
                     "duration_s": v.get("duration"),
                     "poses": _poses_xy(poses),
                     "requested_vx": v.get("vx"),
                     "requested_w": v.get("w"),
                     "collision": bool(v.get("collision")),
+                    "source": "LOCAL_SELECTOR",
                 }
             )
+    source = "LOCAL_SELECTOR" if items else None
     if not items:
         for row in lc.get("rows") or []:
             if not isinstance(row, dict):
@@ -441,11 +445,15 @@ def collect_local_candidates(
                     "poses": _poses_xy(poses),
                     "requested_vx": c.get("vx"),
                     "requested_w": c.get("w"),
+                    "source": "MPPI",
                 }
             )
+            source = "MPPI"
     dists = [float(it.get("distance_m") or 0.0) for it in items]
     valid_n = sum(1 for it in items if it.get("valid"))
     sel = next((it for it in items if it.get("selected")), None)
+    if source is None:
+        source = "LOCAL_SELECTOR" if items else "NONE"
     return {
         "count": len(items),
         "valid_count": valid_n,
@@ -453,6 +461,7 @@ def collect_local_candidates(
         "mean_distance_m": round(sum(dists) / len(dists), 3) if dists else 0.0,
         "items": items,
         "selected_candidate": (sel or {}).get("candidate_id") or (str(selected) if selected else "NONE"),
+        "source": source,
     }
 
 

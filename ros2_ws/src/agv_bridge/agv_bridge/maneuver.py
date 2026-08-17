@@ -341,6 +341,8 @@ class ManeuverFSM:
 
         self.local_selector = LocalManeuverSelector()
         self.decision_label = "FORWARD"
+        self._compare_invoked = False
+        self._compare_fsm_reason = "NEVER"
         # STEP 3F-CORRECTIVE: longitudinal recovery progress (not yaw)
         self._recovery_start_pose: Optional[Tuple[float, float, float]] = None
         self._recovery_exec: Dict[str, Any] = {
@@ -739,6 +741,8 @@ class ManeuverFSM:
                 reason = "ALIGN_OK" if self.mode != POST_TURN else "CAPTURE_OK"
 
         local_compare_tel: Optional[Dict[str, Any]] = None
+        self._compare_invoked = False
+        self._compare_fsm_reason = "NOT_EVALUATED"
         if not skip_fresh:
             decision_label = self.decision_label
         # else: decision_label already set by policy reverse / abort paths
@@ -813,6 +817,8 @@ class ManeuverFSM:
             ) or need_side_compare:
                 # Front corridor stressed: compare LEFT/RIGHT before ALIGN (policy-gated)
                 dyn = bool(dynamic_short)
+                self._compare_invoked = True
+                self._compare_fsm_reason = "INVOKED"
                 cmp = self.local_selector.compare(
                     now=now,
                     x=x,
@@ -1063,6 +1069,41 @@ class ManeuverFSM:
             LOCAL_RIGHT,
         )
 
+        if local_compare_tel is None:
+            if not eval_sides:
+                fsm_r = "ALLOW_SIDE_COMPARE_FALSE"
+            elif not need_side_compare:
+                fsm_r = "NEED_SIDE_COMPARE_FALSE"
+            else:
+                fsm_r = "FSM_NOT_INVOKED"
+            self._compare_fsm_reason = fsm_r
+            try:
+                sel_f = self.local_selector.forensics_dict(now)
+            except Exception:
+                sel_f = {}
+            c_reason = sel_f.get("compare_reason") or "NONE_OPEN_FORWARD"
+            if str(sel_f.get("current") or "FORWARD") == "FORWARD":
+                c_reason = "NONE_OPEN_FORWARD"
+            local_compare_tel = {
+                "invoked": False,
+                "compare_called": False,
+                "compare_reason": c_reason,
+                "fsm_skip_reason": fsm_r,
+                "selector": sel_f,
+                "candidates": {},
+                "rows": [],
+            }
+        else:
+            self._compare_fsm_reason = "INVOKED"
+            local_compare_tel["invoked"] = True
+            local_compare_tel["compare_called"] = self.local_selector.last_compare_called
+            local_compare_tel["compare_reason"] = self.local_selector.last_compare_reason
+            try:
+                local_compare_tel["selector"] = self.local_selector.forensics_dict(now)
+            except Exception:
+                pass
+            local_compare_tel["fsm_skip_reason"] = None
+
         d = ManeuverDecision(
             mode=self.mode,
             target_heading=self.target_heading,
@@ -1129,7 +1170,7 @@ class ManeuverFSM:
         if not d:
             return {"mode": self.mode}
         cap = d.capture
-        return {
+        out = {
             "mode": d.mode,
             "reason": d.reason,
             "target_heading": round(d.target_heading, 4),
@@ -1180,3 +1221,10 @@ class ManeuverFSM:
             "force_w": d.force_w,
             "max_heading_change_horizon": round(max_heading_change_in_horizon(), 3),
         }
+        out["local_compare_invoked"] = bool(getattr(self, "_compare_invoked", False))
+        out["local_compare_fsm_reason"] = getattr(self, "_compare_fsm_reason", None)
+        try:
+            out["local_selector"] = self.local_selector.forensics_dict()
+        except Exception:
+            out["local_selector"] = {}
+        return out

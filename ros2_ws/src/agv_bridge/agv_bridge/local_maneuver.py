@@ -59,6 +59,45 @@ DEC_WAIT = "WAIT"
 DEC_REPLAN = "REPLAN"
 
 
+def _xy_of(p: Any) -> Optional[Pt]:
+    if isinstance(p, dict):
+        return float(p.get("x") or 0.0), float(p.get("y") or 0.0)
+    if isinstance(p, (list, tuple)) and len(p) >= 2:
+        return float(p[0]), float(p[1])
+    return None
+
+
+def _endpoint_distance(path: Sequence[Any], ex: float = 0.0, ey: float = 0.0) -> float:
+    if path:
+        a = _xy_of(path[0])
+        b = _xy_of(path[-1]) if len(path) >= 2 else a
+        if a and b:
+            return math.hypot(b[0] - a[0], b[1] - a[1])
+    return math.hypot(float(ex or 0.0), float(ey or 0.0))
+
+
+def _survived_distance(path: Sequence[Any]) -> float:
+    s = 0.0
+    prev: Optional[Pt] = None
+    for p in path or []:
+        xy = _xy_of(p)
+        if xy is None:
+            continue
+        if prev is not None:
+            s += math.hypot(xy[0] - prev[0], xy[1] - prev[1])
+        prev = xy
+    return s
+
+
+def selector_horizon_s() -> float:
+    return float(ROLLOUT_STEPS) * float(ROLLOUT_DT)
+
+
+def selector_nominal_distance_m(vx: Optional[float] = None) -> float:
+    v = float(NOMINAL_VX if vx is None else vx)
+    return abs(v) * selector_horizon_s()
+
+
 @dataclass
 class LocalManeuverCandidate:
     type: str
@@ -105,6 +144,12 @@ class LocalManeuverCandidate:
             "vx": round(self.vx, 4),
             "w": round(self.w, 4),
             "duration": round(self.duration, 3),
+            "duration_s": round(self.duration, 3),
+            "distance_m": round(_endpoint_distance(self.path, self.endpoint_x, self.endpoint_y), 3),
+            "planned_distance_m": round(abs(float(self.vx or 0.0)) * float(self.duration or 0.0), 3),
+            "actual_survived_distance_m": round(_survived_distance(self.path), 3),
+            "first_collision_t": self.first_collision_t,
+            "first_invalid_reason": None if self.feasible else (self.reason or "UNKNOWN"),
             "endpoint": {
                 "x": round(self.endpoint_x, 3),
                 "y": round(self.endpoint_y, 3),
@@ -370,6 +415,8 @@ class ManeuverComparisonResult:
             "selected": self.selected,
             "reason": self.reason,
             "trigger": self.trigger,
+            "compare_called": (self.snapshot or {}).get("compare_called"),
+            "compare_reason": (self.snapshot or {}).get("compare_reason"),
             "rows": rows,
             "candidates": {k: v.to_dict() for k, v in self.candidates.items()},
             "snapshot": self.snapshot,
@@ -394,6 +441,10 @@ class LocalManeuverSelector:
         self.history: List[Dict[str, Any]] = []
         self.events: List[Dict[str, Any]] = []
         self.regression_score: float = 0.0
+        # P0-C.1 diagnostics only — does not change compare gates
+        self.last_compare_called: bool = False
+        self.last_compare_trigger: str = "NEVER"
+        self.last_compare_reason: str = "NEVER"
 
     def reset(self) -> None:
         self.current = DEC_FORWARD
@@ -407,6 +458,9 @@ class LocalManeuverSelector:
         self.history = []
         self.events = []
         self.regression_score = 0.0
+        self.last_compare_called = False
+        self.last_compare_trigger = "NEVER"
+        self.last_compare_reason = "NEVER"
 
     def _emit(self, event: str, **payload: Any) -> None:
         self.events.append({"ts": time.time(), "event": event, **payload})
@@ -432,6 +486,50 @@ class LocalManeuverSelector:
         if front_near < DEFAULT_GEOM.front_cost_m + 0.15:
             return True
         return False
+
+    def explain_compare_reason(
+        self,
+        *,
+        now: float,
+        front_near: float,
+        forward_feasible: bool,
+        force: bool = False,
+    ) -> str:
+        """Diagnostic mirror of needs_compare + fallthrough. Does not change gates."""
+        if force:
+            return "FORCED"
+        if now - self.last_compare_ts < COMPARE_PERIOD_S and self.last_result is not None:
+            return "COMPARE_PERIOD"
+        if self.current in (DEC_LEFT, DEC_RIGHT):
+            return "SIDE_ACTIVE"
+        if not forward_feasible:
+            return "FORWARD_INFEASIBLE"
+        if front_near < DEFAULT_GEOM.front_cost_m + 0.15:
+            return "FRONT_NEAR"
+        if self.last_result is None:
+            return "NO_PREVIOUS_RESULT"
+        return "NONE_OPEN_FORWARD"
+
+    def _note_compare(self, called: bool, reason: str) -> None:
+        self.last_compare_called = bool(called)
+        self.last_compare_reason = str(reason or "UNKNOWN")
+        self.last_compare_trigger = self.last_compare_reason
+
+    def forensics_dict(self, now: Optional[float] = None) -> Dict[str, Any]:
+        ts = time.time() if now is None else float(now)
+        age = None if float(self.last_compare_ts or 0.0) <= 0.0 else round(ts - float(self.last_compare_ts), 3)
+        return {
+            "selector_horizon_s": round(selector_horizon_s(), 3),
+            "selector_nominal_vx": NOMINAL_VX,
+            "selector_side_vx": SIDE_VX,
+            "selector_nominal_distance_m": round(selector_nominal_distance_m(), 3),
+            "compare_called": self.last_compare_called,
+            "compare_trigger": self.last_compare_trigger,
+            "compare_reason": self.last_compare_reason,
+            "last_compare_age_s": age,
+            "current": self.current,
+            "has_last_result": self.last_result is not None,
+        }
 
     def compare(
         self,
@@ -463,8 +561,26 @@ class LocalManeuverSelector:
         authorized_side: Optional[str] = None,
     ) -> ManeuverComparisonResult:
         if not self.needs_compare(now=now, front_near=front_near, forward_feasible=forward_feasible, force=force):
+            reason = self.explain_compare_reason(
+                now=now, front_near=front_near, forward_feasible=forward_feasible, force=force
+            )
             if self.last_result is not None:
+                self._note_compare(False, reason)
+                try:
+                    self.last_result.snapshot = dict(self.last_result.snapshot or {})
+                    self.last_result.snapshot["compare_called"] = False
+                    self.last_result.snapshot["compare_reason"] = reason
+                except Exception:
+                    pass
                 return self.last_result
+            self._note_compare(True, "NO_PREVIOUS_RESULT")
+        else:
+            self._note_compare(
+                True,
+                self.explain_compare_reason(
+                    now=now, front_near=front_near, forward_feasible=forward_feasible, force=force
+                ),
+            )
         self.last_compare_ts = now
         # Soften capture gate during LOCAL_AVOID (policy require_capture_hard=False)
         capt = bool(require_capture)
@@ -733,6 +849,8 @@ class LocalManeuverSelector:
             "forward_quality": cands[DEC_FORWARD].route_quality,
             "left_quality": cands[DEC_LEFT].route_quality,
             "right_quality": cands[DEC_RIGHT].route_quality,
+            "compare_called": True,
+            "compare_reason": self.last_compare_reason,
         }
         result = ManeuverComparisonResult(
             selected=selected, reason=reason, candidates=cands, trigger=True, snapshot=snap

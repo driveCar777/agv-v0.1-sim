@@ -14,7 +14,9 @@ Aliases: `/api/logs/...` and `/api/nav/logs/...` are equivalent.
 
 Default `limit <= 200`. Use `since` / `cursor` for incremental fetch.
 
-Preview (read-only): `GET /api/nav/preview` → `global_reference` + `local_candidates` + `selected_local` + `global_vs_local` + `kinematic_validation`.
+Preview (read-only): `GET /api/nav/preview` → `global_reference` + `local_candidates` + `selected_local` + `global_vs_local` + `kinematic_validation` + `open_space_forensics`.
+
+Forensics (read-only): `GET /api/nav/forensics/open-space` → full P0-C.1 open-space local planning forensics blob (`controls_vehicle=false`).
 
 Env: `NAV_GLOBAL_PREVIEW=0` disables Global Preview build (telemetry empty / DISABLED); control unchanged.
 

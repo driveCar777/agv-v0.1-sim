@@ -360,6 +360,8 @@ class DiffDriveMppi:
         mode = control_mode or get_control_mode()
         self._path_follow_weight = float(path_follow_weight)
         self._vx_scale = max(0.2, min(1.0, float(vx_scale)))
+        mean_vx_before = float(self._mean_vx)
+        mean_dw_before = float(self._mean_dw)
         # Maneuver-constrained action space (defaults to controller limits)
         a_vx_min = float(self.vx_min if vx_min is None else vx_min)
         a_vx_max = float(self.vx_max if vx_max is None else vx_max)
@@ -411,6 +413,21 @@ class DiffDriveMppi:
                 "horizon_s": 1.2,
                 "maneuver_mode": mmode,
                 "tracker": "TEMPORARY_REVERSE_TRACKER" if mmode == "REVERSE_ESCAPE" else None,
+                "mean_vx_before": round(mean_vx_before, 4),
+                "mean_vx_after": round(float(self._mean_vx), 4),
+                "vx_raw": round(float(vx_cmd), 4),
+                "vx_cmd": round(float(vx_cmd), 4),
+                "vx_scale": round(float(getattr(self, "_vx_scale", 1.0)), 4),
+                "mean_dw": round(float(self._mean_dw), 4),
+                "pp_w": round(float(w_cmd), 4),
+                "w_cmd": round(float(w_cmd), 4),
+                "a_vx_min": round(a_vx_min, 4),
+                "a_vx_max": round(a_vx_max, 4),
+                "wz_max": round(float(self.wz_max), 4),
+                "path_follow_weight": round(float(getattr(self, "_path_follow_weight", 5.0)), 3),
+                "temperature": round(float(self.temperature), 4),
+                "top_k": int(self.top_k),
+                "batch_size": int(self.batch_size),
             }
             return MppiResult(
                 vx=float(vx_cmd),
@@ -451,6 +468,26 @@ class DiffDriveMppi:
             if not force_reverse and a_vx_min >= 0.0 and vx < 0.0:
                 vx = 0.0
             self._cmd_vx, self._cmd_w = vx, w
+            self._last_meta = {
+                **dict(self._last_meta or {}),
+                "control_mode": "pp_only",
+                "horizon_s": round(self.time_steps * self.model_dt, 3),
+                "time_steps": self.time_steps,
+                "model_dt": self.model_dt,
+                "batch_size": self.batch_size,
+                "mean_vx_before": round(mean_vx_before, 4),
+                "mean_vx_after": round(float(self._mean_vx), 4),
+                "vx_raw": round(float(vx), 4),
+                "vx_cmd": round(float(vx), 4),
+                "vx_scale": round(float(getattr(self, "_vx_scale", 1.0)), 4),
+                "mean_dw": round(mean_dw_before, 4),
+                "pp_w": round(float(w), 4),
+                "w_cmd": round(float(w), 4),
+                "a_vx_min": round(a_vx_min, 4),
+                "a_vx_max": round(a_vx_max, 4),
+                "wz_max": round(float(self.wz_max), 4),
+                "path_follow_weight": round(float(getattr(self, "_path_follow_weight", 5.0)), 3),
+            }
             return MppiResult(
                 vx=vx,
                 w=w,
@@ -639,6 +676,23 @@ class DiffDriveMppi:
             "maneuver_mode": mmode or "NONE",
             "vx_min": a_vx_min,
             "vx_max": a_vx_max,
+            "mean_vx_before": round(mean_vx_before, 4),
+            "mean_vx_after": round(float(self._mean_vx), 4),
+            "vx_raw": round(float(vx_raw), 4),
+            "vx_cmd": round(float(vx_cmd), 4),
+            "vx_scale": round(float(getattr(self, "_vx_scale", 1.0)), 4),
+            "mean_dw": round(float(self._mean_dw), 4),
+            "mean_dw_before": round(mean_dw_before, 4),
+            "pp_w": round(float(pp_w), 4),
+            "w_cmd": round(float(w_cmd), 4),
+            "a_vx_min": round(a_vx_min, 4),
+            "a_vx_max": round(a_vx_max, 4),
+            "wz_max": round(float(self.wz_max), 4),
+            "path_follow_weight": round(float(getattr(self, "_path_follow_weight", 5.0)), 3),
+            "temperature": round(float(self.temperature), 4),
+            "top_k": int(self.top_k),
+            "batch_size": int(batch),
+            "control_mode": "mppi",
         }
 
         return MppiResult(

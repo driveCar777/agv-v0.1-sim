@@ -116,6 +116,7 @@ class LocalMppiModel:
         self.last_physical_trajectory = None  # active corridor dict for UI
         self._prev_progress_s = 0.0
         self._prev_progress_ts = 0.0
+        self.last_path_valid = True
 
     def set_control_mode(self, mode: str) -> str:
         m = (mode or "mppi").strip().lower()
@@ -226,6 +227,7 @@ class LocalMppiModel:
         self._prev_progress_ts = now
 
         path_valid = bool(global_path) and len(global_path) >= 2
+        self.last_path_valid = path_valid
         proj = project_pose_to_path(x, y, yaw, global_path) if path_valid else None
         heading_error = float(proj.heading_err) if proj else 0.0
         lat = float(proj.lateral_m) if proj else float(lateral_error)

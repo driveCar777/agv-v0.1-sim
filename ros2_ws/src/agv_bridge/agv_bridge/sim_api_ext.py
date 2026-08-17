@@ -83,6 +83,7 @@ def patch_mock_state(state) -> None:
     state._local_candidates_layer: Dict[str, Any] = {}
     state._selected_local: Dict[str, Any] = {}
     state._kinematic_validation: Dict[str, Any] = {}
+    state._open_space_forensics: Dict[str, Any] = {}
     state._last_kv_id = ""
     state._last_kv_status = ""
     state._stuck_since = 0.0
@@ -912,6 +913,36 @@ def patch_mock_state(state) -> None:
                 pass
         except Exception:
             pass
+        # P0-C.1: open-space forensics AFTER control + P0-C (telemetry only)
+        try:
+            from agv_bridge.nav_open_space_forensics import assemble_open_space_forensics
+
+            forensic = assemble_open_space_forensics(
+                dbg=dbg,
+                gref=dbg.get("global_reference") if isinstance(dbg.get("global_reference"), dict) else {},
+                loc_layer=dbg.get("local_candidates") if isinstance(dbg.get("local_candidates"), dict) else {},
+                kv=dbg.get("kinematic_validation") if isinstance(dbg.get("kinematic_validation"), dict) else {},
+                maneuver=maneuver,
+                policy=nav_policy,
+                mppi_meta=mppi_meta,
+                physical=dbg.get("physical_trajectory")
+                if isinstance(dbg.get("physical_trajectory"), dict)
+                else (getattr(state, "_physical_corridor", {}) or {}),
+                planned_path=planned,
+                cmd_vx=cmd_vx,
+                safe_vx=safe_vx,
+                state_vx=state_vx,
+                front_near=front_near,
+                rear_near=rear_near,
+                stop_reason=stop_reason,
+                control_mode=control_mode,
+                path_valid=bool(gpath) and len(gpath) >= 2,
+            )
+            dbg["open_space_forensics"] = forensic
+            with state.lock:
+                state._open_space_forensics = forensic
+        except Exception:
+            pass
         # P0-B-0: read-only observability ingest (must not affect control)
         try:
             from agv_bridge.nav_observability import OBS
@@ -1065,6 +1096,7 @@ def patch_mock_state(state) -> None:
             loc = dict(getattr(state, "_local_candidates_layer", {}) or {})
             sel = dict(getattr(state, "_selected_local", {}) or {})
             kv = dict(getattr(state, "_kinematic_validation", {}) or {})
+            fos = dict(getattr(state, "_open_space_forensics", {}) or {})
             gvl = (state._debug_snapshot or {}).get("global_vs_local") if isinstance(state._debug_snapshot, dict) else {}
         if not gref:
             _refresh_debug_snapshot(time.time())
@@ -1073,6 +1105,7 @@ def patch_mock_state(state) -> None:
                 loc = dict(getattr(state, "_local_candidates_layer", {}) or {})
                 sel = dict(getattr(state, "_selected_local", {}) or {})
                 kv = dict(getattr(state, "_kinematic_validation", {}) or {})
+                fos = dict(getattr(state, "_open_space_forensics", {}) or {})
                 gvl = (state._debug_snapshot or {}).get("global_vs_local") if isinstance(state._debug_snapshot, dict) else {}
         return {
             "success": True,
@@ -1081,7 +1114,23 @@ def patch_mock_state(state) -> None:
             "selected_local": sel,
             "global_vs_local": gvl or {},
             "kinematic_validation": kv or {},
+            "open_space_forensics": fos or {},
             "geometry_version": "p0a",
+            "generated_at": time.time(),
+            "controls_vehicle": False,
+        }
+
+    def get_open_space_forensics() -> Dict[str, Any]:
+        """GET-only P0-C.1 open-space local planning forensics. Never a control API."""
+        with state.lock:
+            blob = dict(getattr(state, "_open_space_forensics", {}) or {})
+        if not blob:
+            _refresh_debug_snapshot(time.time())
+            with state.lock:
+                blob = dict(getattr(state, "_open_space_forensics", {}) or {})
+        return {
+            "success": True,
+            "open_space_forensics": blob or {},
             "generated_at": time.time(),
             "controls_vehicle": False,
         }
@@ -1099,6 +1148,7 @@ def patch_mock_state(state) -> None:
     state.get_nav_api_logs = get_nav_api_logs
     state.configure_nav_logs = configure_nav_logs
     state.get_nav_preview = get_nav_preview
+    state.get_open_space_forensics = get_open_space_forensics
     state._refresh_debug_snapshot = _refresh_debug_snapshot
     def _physics_loop() -> None:
         dt = 0.05

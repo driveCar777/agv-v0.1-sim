@@ -146,6 +146,7 @@ class SimApp:
             local_cands_layer = dict(getattr(self.state, "_local_candidates_layer", {}) or {})
             selected_local = dict(getattr(self.state, "_selected_local", {}) or {})
             kinematic_validation = dict(getattr(self.state, "_kinematic_validation", {}) or {})
+            open_space_forensics = dict(getattr(self.state, "_open_space_forensics", {}) or {})
             path_rev = int(getattr(self.state, "_global_path_revision", 0) or 0)
         navigating = nav_mode in ("tracking", "avoid", "planned", "planner_debug")
         # 未导航：车周静态点云；导航中：实时雷达点云为主
@@ -264,12 +265,14 @@ class SimApp:
                     "valid_count": local_cands_layer.get("valid_count"),
                     "max_distance_m": local_cands_layer.get("max_distance_m"),
                     "mean_distance_m": local_cands_layer.get("mean_distance_m"),
+                    "source": local_cands_layer.get("source"),
                     "items": (local_cands_layer.get("items") or [])[:12],
                 }
                 if local_cands_layer
                 else {"count": 0, "items": []},
                 "selected_local": selected_local or None,
                 "kinematic_validation": self._kinematic_summary(kinematic_validation),
+                "open_space_forensics": self._open_space_summary(open_space_forensics),
                 "global_path_revision": path_rev,
                 "safety_envelope": {
                     "front_near": round(front_near, 3),
@@ -391,6 +394,38 @@ class SimApp:
         out.setdefault("kinematic_valid", kv.get("kinematic_valid"))
         out.setdefault("controls_vehicle", False)
         return out
+
+    @staticmethod
+    def _open_space_summary(fos: Dict[str, Any]) -> Dict[str, Any]:
+        """Compact /api/state open-space forensics (full blob via GET /api/nav/forensics/open-space)."""
+        if not fos:
+            return {}
+        loc = fos.get("local_selector") if isinstance(fos.get("local_selector"), dict) else {}
+        mppi = fos.get("mppi") if isinstance(fos.get("mppi"), dict) else {}
+        cmd = fos.get("command") if isinstance(fos.get("command"), dict) else {}
+        pol = fos.get("policy") if isinstance(fos.get("policy"), dict) else {}
+        diag = fos.get("diagnostics") if isinstance(fos.get("diagnostics"), dict) else {}
+        return {
+            "scene": fos.get("scene"),
+            "policy_scene": fos.get("policy_scene") or pol.get("scene"),
+            "global_preview_m": fos.get("global_preview_m"),
+            "local_horizon_s": loc.get("horizon_s"),
+            "local_max_distance_m": loc.get("max_distance_m"),
+            "compare_called": loc.get("compare_called"),
+            "compare_reason": loc.get("compare_reason"),
+            "mppi_horizon_s": mppi.get("horizon_s"),
+            "mean_vx": mppi.get("mean_vx_after") or mppi.get("mean_vx_before"),
+            "vx_raw": mppi.get("vx_raw"),
+            "vx_cmd": mppi.get("vx_cmd"),
+            "vx_scale": mppi.get("vx_scale") or pol.get("vx_scale"),
+            "requested_vx": cmd.get("requested_vx"),
+            "safe_vx": cmd.get("safe_vx"),
+            "state_vx": cmd.get("state_vx"),
+            "coverage_ratio": diag.get("coverage_ratio"),
+            "short_horizon_reason": diag.get("short_horizon_reason"),
+            "safety_clamp": diag.get("safety_clamp"),
+            "controls_vehicle": False,
+        }
 
     @staticmethod
     def _local_path(path: list, x: float, y: float, horizon_m: float = 5.0) -> list:
@@ -610,7 +645,13 @@ def make_handler(www: Path):
                 if hasattr(APP.state, "get_nav_preview"):
                     self._json(200, APP.state.get_nav_preview())
                 else:
-                    self._json(200, {"success": False, "message": "preview unsupported"})
+                    self._json(404, {"success": False, "error": "preview unavailable"})
+                return
+            if path in ("/api/nav/forensics/open-space", "/api/nav/forensics/open_space"):
+                if hasattr(APP.state, "get_open_space_forensics"):
+                    self._json(200, APP.state.get_open_space_forensics())
+                else:
+                    self._json(404, {"success": False, "error": "forensics unavailable"})
                 return
             # P0-B-0 observability APIs
             if path in ("/api/logs", "/api/nav/logs", "/api/logs/events", "/api/nav/logs/events"):
