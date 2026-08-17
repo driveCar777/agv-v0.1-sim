@@ -277,3 +277,26 @@ P0-E = NOT STARTED
 P1-2 = NOT STARTED
 3G   = FORBIDDEN
 ```
+
+---
+
+## Code Audit Index
+
+**FULL COMMIT:** `3118559dead2024c13e8468eaec446345ed1c42f`  
+**SHORT:** `3118559`  
+**URL:** https://github.com/driveCar777/agv-v0.1-sim/commit/3118559dead2024c13e8468eaec446345ed1c42f
+
+| # | Topic | Blob |
+|---|-------|------|
+| 1 | Rolling Local Planner | https://github.com/driveCar777/agv-v0.1-sim/blob/3118559dead2024c13e8468eaec446345ed1c42f/ros2_ws/src/agv_bridge/agv_bridge/nav_local_planner.py |
+| 2 | Speed Policy | https://github.com/driveCar777/agv-v0.1-sim/blob/3118559dead2024c13e8468eaec446345ed1c42f/ros2_ws/src/agv_bridge/agv_bridge/nav_speed_policy.py |
+| 3 | LocalPlan interface / wiring | https://github.com/driveCar777/agv-v0.1-sim/blob/3118559dead2024c13e8468eaec446345ed1c42f/ros2_ws/src/agv_bridge/agv_bridge/nav_models.py |
+| 4 | MPPI integration | https://github.com/driveCar777/agv-v0.1-sim/blob/3118559dead2024c13e8468eaec446345ed1c42f/ros2_ws/src/agv_bridge/agv_bridge/mppi_controller.py |
+| 5 | Local Selector (unchanged) | https://github.com/driveCar777/agv-v0.1-sim/blob/3118559dead2024c13e8468eaec446345ed1c42f/ros2_ws/src/agv_bridge/agv_bridge/local_maneuver.py |
+| 6 | Telemetry / events | https://github.com/driveCar777/agv-v0.1-sim/blob/3118559dead2024c13e8468eaec446345ed1c42f/ros2_ws/src/agv_bridge/agv_bridge/nav_observability.py |
+| 7 | API / preview | https://github.com/driveCar777/agv-v0.1-sim/blob/3118559dead2024c13e8468eaec446345ed1c42f/ros2_ws/src/agv_bridge/agv_bridge/sim_api_ext.py |
+| 8 | Open audit A–E | https://github.com/driveCar777/agv-v0.1-sim/blob/3118559dead2024c13e8468eaec446345ed1c42f/scripts/_audit_phase4_local_planner_open.py |
+| 9 | Report | https://github.com/driveCar777/agv-v0.1-sim/blob/3118559dead2024c13e8468eaec446345ed1c42f/docs/PHASE4_P1_1_ROLLING_LOCAL_PLANNER_REPORT.md |
+| 10 | UI layers | https://github.com/driveCar777/agv-v0.1-sim/blob/3118559dead2024c13e8468eaec446345ed1c42f/ros2_ws/src/delivery_web/www/sim3d.js |
+
+Also: `nav_global_preview.collect_local_candidates` (rolling priority), `run_web_sim.py` routes, P1-0 audit `docs/PHASE4_P1_0_LOCAL_PLANNING_ARCHITECTURE_AUDIT.md`.
