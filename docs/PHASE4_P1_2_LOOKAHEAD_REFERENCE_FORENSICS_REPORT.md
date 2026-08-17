@@ -1,6 +1,7 @@
 # PHASE4 P1-2-OBSERVE — Pink Lookahead / Global-Local Reference Conflict Forensics
 
 **Baseline:** `3118559dead2024c13e8468eaec446345ed1c42f` (P1-1)  
+**Forensics commit:** `bbef47a204e9ee0367d99b9838b1c560c8559810`
 **Repo:** https://github.com/driveCar777/agv-v0.1-sim  
 **Scope:** Diagnostics / trace / API / report only — **no navigation behavior change**
 
@@ -183,19 +184,19 @@ Offline L5 synthetic test emitted `REFERENCE_AUTHORITY_MISMATCH`.
 
 ## Commit-Pinned Code Audit Index
 
-*(Replace `<COMMIT>` with post-push `git rev-parse HEAD`)*
+*(Commit `bbef47a204e9ee0367d99b9838b1c560c8559810`)*
 
-1. Lookahead UI source — https://github.com/driveCar777/agv-v0.1-sim/blob/<COMMIT>/ros2_ws/src/delivery_web/www/sim3d.js
-2. Display lookahead producer — https://github.com/driveCar777/agv-v0.1-sim/blob/<COMMIT>/ros2_ws/src/agv_bridge/agv_bridge/sim_api_ext.py
-3. Pure Pursuit + diagnostic target — https://github.com/driveCar777/agv-v0.1-sim/blob/<COMMIT>/ros2_ws/src/agv_bridge/agv_bridge/mppi_controller.py
+1. Lookahead UI source — https://github.com/driveCar777/agv-v0.1-sim/blob/bbef47a204e9ee0367d99b9838b1c560c8559810/ros2_ws/src/delivery_web/www/sim3d.js
+2. Display lookahead producer — https://github.com/driveCar777/agv-v0.1-sim/blob/bbef47a204e9ee0367d99b9838b1c560c8559810/ros2_ws/src/agv_bridge/agv_bridge/sim_api_ext.py
+3. Pure Pursuit + diagnostic target — https://github.com/driveCar777/agv-v0.1-sim/blob/bbef47a204e9ee0367d99b9838b1c560c8559810/ros2_ws/src/agv_bridge/agv_bridge/mppi_controller.py
 4. MPPI follow_path — same file, `step()`
-5. Rolling Local Planner — https://github.com/driveCar777/agv-v0.1-sim/blob/<COMMIT>/ros2_ws/src/agv_bridge/agv_bridge/nav_local_planner.py
-6. nav_models wiring — https://github.com/driveCar777/agv-v0.1-sim/blob/<COMMIT>/ros2_ws/src/agv_bridge/agv_bridge/nav_models.py
-7. nav_debug — https://github.com/driveCar777/agv-v0.1-sim/blob/<COMMIT>/ros2_ws/src/agv_bridge/agv_bridge/nav_debug.py
-8. nav_observability — https://github.com/driveCar777/agv-v0.1-sim/blob/<COMMIT>/ros2_ws/src/agv_bridge/agv_bridge/nav_observability.py
-9. Lookahead forensics — https://github.com/driveCar777/agv-v0.1-sim/blob/<COMMIT>/ros2_ws/src/agv_bridge/agv_bridge/nav_lookahead_forensics.py
-10. Trace script — https://github.com/driveCar777/agv-v0.1-sim/blob/<COMMIT>/scripts/_trace_phase4_lookahead_obstacle_intrusion.py
-11. This report — https://github.com/driveCar777/agv-v0.1-sim/blob/<COMMIT>/docs/PHASE4_P1_2_LOOKAHEAD_REFERENCE_FORENSICS_REPORT.md
+5. Rolling Local Planner — https://github.com/driveCar777/agv-v0.1-sim/blob/bbef47a204e9ee0367d99b9838b1c560c8559810/ros2_ws/src/agv_bridge/agv_bridge/nav_local_planner.py
+6. nav_models wiring — https://github.com/driveCar777/agv-v0.1-sim/blob/bbef47a204e9ee0367d99b9838b1c560c8559810/ros2_ws/src/agv_bridge/agv_bridge/nav_models.py
+7. nav_debug — https://github.com/driveCar777/agv-v0.1-sim/blob/bbef47a204e9ee0367d99b9838b1c560c8559810/ros2_ws/src/agv_bridge/agv_bridge/nav_debug.py
+8. nav_observability — https://github.com/driveCar777/agv-v0.1-sim/blob/bbef47a204e9ee0367d99b9838b1c560c8559810/ros2_ws/src/agv_bridge/agv_bridge/nav_observability.py
+9. Lookahead forensics — https://github.com/driveCar777/agv-v0.1-sim/blob/bbef47a204e9ee0367d99b9838b1c560c8559810/ros2_ws/src/agv_bridge/agv_bridge/nav_lookahead_forensics.py
+10. Trace script — https://github.com/driveCar777/agv-v0.1-sim/blob/bbef47a204e9ee0367d99b9838b1c560c8559810/scripts/_trace_phase4_lookahead_obstacle_intrusion.py
+11. This report — https://github.com/driveCar777/agv-v0.1-sim/blob/bbef47a204e9ee0367d99b9838b1c560c8559810/docs/PHASE4_P1_2_LOOKAHEAD_REFERENCE_FORENSICS_REPORT.md
 
 ---
 
