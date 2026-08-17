@@ -339,14 +339,23 @@
       dbg_safety(card) {
         const body = card.querySelector(".widget-body");
         throttleSnap(card, 180, (snap) => {
-          const sf = snap.debug?.safety || {};
-          body.innerHTML = kv([
-            ["decision", sf.decision || "—"],
-            ["block", sf.block_reason || "—"],
-            ["front", fmt(sf.front_near, 2)],
-            ["rear", fmt(sf.rear_near, 2)],
-            ["collision", sf.collision ? "TRUE" : "false"],
-          ]);
+          const sf = snap.debug?.safety || snap.safety || {};
+          const sev = sf.nav_ui_severity || snap.nav?.nav_ui_severity || "NORMAL";
+          const sevCls = sev === "FAILED" ? "cut" : sev === "RECOVERY" ? "warn" : sev === "DEGRADED" ? "warn" : "ok";
+          body.innerHTML =
+            `<div class="bb-state ${sevCls}">${sev}</div>` +
+            kv([
+              ["safe_vx_reason", sf.safe_vx_reason || snap.nav?.safe_vx_reason || "—"],
+              ["planner", sf.planner_state || snap.nav?.planner_state || "—"],
+              ["recovery", sf.recovery_state || snap.nav?.recovery_state || "—"],
+              ["fp clr", fmt(sf.footprint_clearance_m ?? snap.nav?.footprint_clearance_m, 3)],
+              ["pred min", fmt(sf.predicted_min_clearance_m ?? snap.nav?.predicted_min_clearance_m, 3)],
+              ["decision", sf.decision || "—"],
+              ["block", sf.block_reason || "—"],
+              ["front", fmt(sf.front_near, 2)],
+              ["rear", fmt(sf.rear_near, 2)],
+              ["collision", sf.collision ? "TRUE" : "false"],
+            ]);
         });
       },
       dbg_recovery(card) {
@@ -354,12 +363,22 @@
         throttleSnap(card, 200, (snap) => {
           const rc = snap.debug?.recovery || {};
           const st = snap.debug?.status || {};
+          const nav = snap.nav || {};
           const atts = snap.debug?.recovery_attempts || [];
           const last = atts[atts.length - 1];
+          const pstate = nav.planner_state || rc.planner_state || "—";
+          const isFailed = pstate === "NAVIGATION_FAILED" || nav.stop_reason === "NAVIGATION_FAILED";
+          const isRec = pstate === "LOCAL_RECOVERY" || nav.recovery_state !== "NONE";
+          const badge = isFailed ? "FAILED" : isRec ? "RECOVERY" : pstate;
+          const badgeCls = isFailed ? "cut" : isRec ? "warn" : "ok";
           body.innerHTML =
+            `<div class="bb-state ${badgeCls}">${badge}</div>` +
             kv([
-              ["phase", rc.phase || st.phase || "—"],
-              ["attempt", `${rc.recovery_attempts ?? st.recovery_attempts ?? 0} / ${rc.max_attempts ?? 3}`],
+              ["planner", pstate],
+              ["failure", nav.planner_failure_reason || rc.planner_failure_reason || "—"],
+              ["phase", rc.phase || st.phase || nav.phase || "—"],
+              ["action", nav.recovery_state || rc.last_recovery_action || "—"],
+              ["attempt", `${nav.recovery_attempt ?? rc.recovery_attempts ?? st.recovery_attempts ?? 0} / ${rc.max_attempts ?? 3}`],
               ["last", rc.last_recovery_action || "—"],
               ["result", last?.result || "—"],
             ]) +

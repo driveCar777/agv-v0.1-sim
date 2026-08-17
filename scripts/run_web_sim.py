@@ -134,6 +134,14 @@ class SimApp:
             path_progress_s = float(getattr(self.state, "_path_progress_s", 0.0) or 0.0)
             goal_distance = float(getattr(self.state, "_goal_distance", 0.0) or 0.0)
             recovery_attempts = int(getattr(self.state, "_recovery_attempts", 0) or 0)
+            safe_vx_reason = str(getattr(self.state, "_safe_vx_reason", "NORMAL") or "NORMAL")
+            planner_state = str(getattr(self.state, "_planner_state", "NORMAL") or "NORMAL")
+            planner_failure_reason = str(getattr(self.state, "_planner_failure_reason", "") or "")
+            recovery_state = str(getattr(self.state, "_recovery_state", "NONE") or "NONE")
+            recovery_attempt = int(getattr(self.state, "_recovery_attempt", 0) or 0)
+            footprint_clearance_m = getattr(self.state, "_footprint_clearance_m", None)
+            predicted_min_clearance_m = getattr(self.state, "_predicted_min_clearance_m", None)
+            nav_ui_severity = str(getattr(self.state, "_nav_ui_severity", "NORMAL") or "NORMAL")
             control_mode = str(getattr(self.state, "_control_mode", "mppi") or "mppi")
             emergency = bool(getattr(self.state, "emergency", False) or getattr(self.state, "soft_emc", False))
             raw_global = list(getattr(self.state, "_raw_global_path", []) or [])
@@ -254,6 +262,18 @@ class SimApp:
                 "goal_distance": round(goal_distance, 3),
                 "recovery_attempts": recovery_attempts,
                 "stop_reason": stop_reason,
+                "safe_vx_reason": safe_vx_reason,
+                "planner_state": planner_state,
+                "planner_failure_reason": planner_failure_reason,
+                "recovery_state": recovery_state,
+                "recovery_attempt": recovery_attempt,
+                "footprint_clearance_m": footprint_clearance_m,
+                "predicted_min_clearance_m": predicted_min_clearance_m,
+                "nav_ui_severity": nav_ui_severity,
+                "requested_vx": round(mppi_vx, 4),
+                "approved_vx": round(cmd_vx_as, 4),
+                "requested_omega": round(mppi_w, 4),
+                "approved_omega": round(cmd_w_as, 4),
                 "candidate_count": len(candidates),
                 "planning": planning_metrics,
                 "path_lateral_error": round(path_lateral, 4),
@@ -305,6 +325,12 @@ class SimApp:
                 "emergency": emergency,
                 "obstacle_blocked": stop_reason in ("FRONT_OBSTACLE", "REAR_OBSTACLE", "COLLISION_GUARD"),
                 "stop_reason": stop_reason,
+                "safe_vx_reason": safe_vx_reason,
+                "planner_state": planner_state,
+                "recovery_state": recovery_state,
+                "nav_ui_severity": nav_ui_severity,
+                "footprint_clearance_m": footprint_clearance_m,
+                "predicted_min_clearance_m": predicted_min_clearance_m,
             },
             "stations": {s["id"]: s for s in self._stations()},
             "pois": self.world.pois(),
