@@ -230,6 +230,7 @@ def assemble_open_space_forensics(
             "batch_size": mppi_meta.get("batch_size") or mppi_meta.get("batch"),
             "temperature": mppi_meta.get("temperature"),
             "top_k": mppi_meta.get("top_k"),
+            "mean_vx": mppi_meta.get("mean_vx_after") or mppi_meta.get("mean_vx"),
             "mean_vx_before": mppi_meta.get("mean_vx_before"),
             "mean_vx_after": mppi_meta.get("mean_vx_after") or mppi_meta.get("mean_vx"),
             "vx_raw": mppi_meta.get("vx_raw"),
@@ -242,8 +243,12 @@ def assemble_open_space_forensics(
             "a_vx_max": mppi_meta.get("a_vx_max") if mppi_meta.get("a_vx_max") is not None else mppi_meta.get("vx_max"),
             "wz_max": mppi_meta.get("wz_max"),
             "path_follow_weight": mppi_meta.get("path_follow_weight") or pol_dec.get("path_follow_weight"),
+            # Soft preference only (mppi_controller._score); NOT a hard cruise setpoint
+            "speed_target": 0.22,
+            "speed_target_kind": "SOFT_SPEED_TRACK_COST",
             "best_path_distance_m": None if mppi_path_m is None else round(mppi_path_m, 3),
             "control_mode": control_mode or mppi_meta.get("control_mode") or get_control_mode(),
+            "local_replan_period_s": 0.35,
         },
         "policy": {
             "state": pstate,
@@ -289,17 +294,31 @@ def assemble_open_space_forensics(
             "expected_distance_at_nominal_vx": round(selector_nominal_distance_m(NOMINAL_VX), 3),
             "expected_distance_at_state_vx": None if stv is None else round(abs(stv) * horizon_s, 3),
             "planned_distance_m": None if planned_m is None else round(planned_m, 3),
+            "rendered_distance_m": local_max,
+            "executed_distance_m": None if survived_m is None else round(survived_m, 3),
             "actual_survived_distance_m": None if survived_m is None else round(survived_m, 3),
             "speed_ratio": speed_ratio,
             "speed_ratio_to_nominal": speed_ratio_nom,
             "max_vx": MAX_VX,
+            # P1-0 role classification (telemetry); does not change control
+            "local_selector_role_in_open": (
+                "OBSERVATION_ONLY"
+                if (compare_called is False or str(compare_reason or "") == "NONE_OPEN_FORWARD")
+                and str(pstate or "").upper() in ("FOLLOW_GLOBAL", "IDLE", "")
+                else "MIXED"
+            ),
+            "open_space_cruise_speed": "NO_EXPLICIT_OPEN_SPACE_CRUISE_SPEED",
+            "architecture_mode_open": "GLOBAL_TRACKING_PLUS_MPPI",
+            "architecture_mode_avoid": "LOCAL_SELECTOR_PLUS_MANEUVER_PLUS_MPPI",
             "open_space_target_vx_code": {
                 "selector_forward": NOMINAL_VX,
                 "selector_side": SIDE_VX,
                 "mppi_mean_init": 0.16,
+                "mppi_speed_track_soft": 0.22,
                 "mppi_vx_max_forward_track": round(MAX_VX * 0.95, 3),
                 "policy_normal_vx_scale": 1.0,
-                "note": "OPEN FOLLOW_GLOBAL does not command 0.22 or max_vx; MPPI prior is 0.16 with 0.82/0.18 cmd lag",
+                "pp_only_cruise": 0.22,
+                "note": "OPEN FOLLOW_GLOBAL has no hard cruise; soft track 0.22 + mean init 0.16 + sample std 0.08 + EMA",
             },
         },
     }

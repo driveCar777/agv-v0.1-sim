@@ -16,7 +16,9 @@ Default `limit <= 200`. Use `since` / `cursor` for incremental fetch.
 
 Preview (read-only): `GET /api/nav/preview` → `global_reference` + `local_candidates` + `selected_local` + `global_vs_local` + `kinematic_validation` + `open_space_forensics`.
 
-Forensics (read-only): `GET /api/nav/forensics/open-space` → full P0-C.1 open-space local planning forensics blob (`controls_vehicle=false`).
+Forensics (read-only): `GET /api/nav/forensics/open-space` → full P0-C.1 / P1-0 open-space local planning forensics blob (`controls_vehicle=false`).
+
+P1-0 diagnostic extras (assemble-only): `mppi.speed_target` (soft 0.22), `diagnostics.local_selector_role_in_open`, `diagnostics.open_space_cruise_speed`, `diagnostics.planned_distance_m` / `rendered_distance_m` / `executed_distance_m`. See `docs/PHASE4_P1_0_LOCAL_PLANNING_ARCHITECTURE_AUDIT.md`.
 
 Env: `NAV_GLOBAL_PREVIEW=0` disables Global Preview build (telemetry empty / DISABLED); control unchanged.
 
