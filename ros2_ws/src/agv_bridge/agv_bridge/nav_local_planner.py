@@ -21,6 +21,11 @@ from agv_bridge.nav_kinematic import W_MAX_CONTROL, control_limits
 from agv_bridge.nav_speed_policy import OPEN_CRUISE_VX, SpeedPolicyResult
 from agv_bridge.path_progress import project_pose_to_path
 
+try:
+    from agv_bridge.nav_obstacle_preview import FuturePreviewResult
+except ImportError:
+    FuturePreviewResult = Any  # type: ignore
+
 Pt = Tuple[float, float]
 CollideFn = Callable[[float, float], bool]
 ClearanceFn = Callable[[float, float], float]
@@ -110,6 +115,10 @@ class LocalPlanRequest:
     kinematic_valid_global: Optional[bool] = None
     maneuver_mode: str = ""
     authority: str = AUTH_ROLLING
+    future_preview: Optional["FuturePreviewResult"] = None
+    obstacle_pass_state: str = "UNKNOWN"
+    obstacle_passed: bool = False
+    preferred_side_hint: Optional[str] = None
 
 
 @dataclass
@@ -452,22 +461,58 @@ class RollingLocalPlanner:
                     goal=req.goal,
                     target_vx=target,
                     scene=req.scene,
+                    reconnect_gate=bool(
+                        not req.obstacle_passed
+                        and req.future_preview is not None
+                        and getattr(req.future_preview, "future_collision", False)
+                    ),
                 )
+                if (
+                    req.future_preview is not None
+                    and getattr(req.future_preview, "future_global_blocked", False)
+                    and kind == KIND_FORWARD
+                ):
+                    cand.valid = False
+                    cand.reject_reason = "FUTURE_GLOBAL_BLOCKED"
+                    cand.score = 1e6
                 cands.append(cand)
 
         valid = [c for c in cands if c.valid]
         selected: Optional[LocalCandidate] = None
         if valid:
             valid.sort(key=lambda c: c.score)
-            # OPEN + forward feasible: prefer FORWARD among near-best
             sc = str(req.scene or "OPEN").upper()
+            fp = req.future_preview
+            future_blocked = bool(
+                fp is not None
+                and getattr(fp, "future_global_blocked", False)
+                and getattr(fp, "future_collision", False)
+            )
+            approach_early = bool(fp is not None and getattr(fp, "approach_active", False))
             fwd_ok = float(req.front_near) >= float(geom.front_stop_m) + 0.15
-            if sc in ("OPEN", "OPEN_SPACE", "") and fwd_ok:
+            if future_blocked or approach_early:
+                fwd_ok = False
+            if sc in ("OPEN", "OPEN_SPACE", "") and fwd_ok and not future_blocked:
                 best = valid[0].score
                 fwds = [c for c in valid if c.kind == KIND_FORWARD and c.score <= best + 1.15]
                 selected = fwds[0] if fwds else valid[0]
             else:
-                selected = valid[0]
+                # P0-D: prefer valid side arc when forward global path is future-blocked
+                side_pref = req.preferred_side_hint
+                if side_pref is None and fp is not None:
+                    side_pref = getattr(fp, "preferred_side", None)
+                arcs = [c for c in valid if c.kind in (KIND_LEFT_ARC, KIND_RIGHT_ARC)]
+                if future_blocked and arcs:
+                    if side_pref == "LEFT":
+                        lefts = [c for c in arcs if c.kind == KIND_LEFT_ARC]
+                        selected = lefts[0] if lefts else arcs[0]
+                    elif side_pref == "RIGHT":
+                        rights = [c for c in arcs if c.kind == KIND_RIGHT_ARC]
+                        selected = rights[0] if rights else arcs[0]
+                    else:
+                        selected = arcs[0]
+                else:
+                    selected = valid[0]
             for c in cands:
                 c.selected = c is selected
         else:
@@ -521,6 +566,7 @@ class RollingLocalPlanner:
         goal: Optional[Pt],
         target_vx: float,
         scene: str,
+        reconnect_gate: bool = False,
     ) -> LocalCandidate:
         poses: List[Pose] = [{"x": round(x, 4), "y": round(y, 4), "yaw": round(yaw, 5)}]
         cx, cy, cyaw = x, y, yaw
@@ -560,6 +606,13 @@ class RollingLocalPlanner:
             cand.reject_reason = "FOOTPRINT_COLLISION"
             cand.score = 1e6
             cand.cost_breakdown = {"collision_cost": 700.0, "total": 700.0}
+            return cand
+
+        # P0-D: global reconnect gate — block forward while obstacle not passed
+        if kind == KIND_FORWARD and reconnect_gate:
+            cand.valid = False
+            cand.reject_reason = "FUTURE_GLOBAL_BLOCKED"
+            cand.score = 1e6
             return cand
 
         clrs: List[float] = []
@@ -617,7 +670,8 @@ class RollingLocalPlanner:
         clr_cost = 0.0 if cand.min_clearance is None else 1.8 * max(0.0, 0.55 - cand.min_clearance)
         curv_cost = 0.55 * abs(kappa)
         speed_cost = 0.90 * abs(vx - target_vx)
-        reconnect_cost = 1.1 * cand.reconnect_m
+        reconnect_mult = 3.6 if reconnect_gate else 1.0
+        reconnect_cost = 1.1 * cand.reconnect_m * reconnect_mult
         recover_cost = 2.0 * (1.0 - cand.recoverability)
         total = (
             progress_cost

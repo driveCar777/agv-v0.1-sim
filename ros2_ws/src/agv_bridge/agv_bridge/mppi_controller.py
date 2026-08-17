@@ -594,11 +594,26 @@ class DiffDriveMppi:
         follow_path = global_path
         if local_plan_path and len(local_plan_path) >= 2:
             follow_path = local_plan_path
-        la_m = 1.4
-        if local_plan_horizon_m is not None and float(local_plan_horizon_m) > 0.4:
-            spd_la = abs(self._cmd_vx) if abs(self._cmd_vx) > 0.05 else abs(self._mean_vx)
-            la_m = max(0.55, min(2.2, max(0.7, spd_la * 1.25)))
-            la_m = min(la_m, max(0.6, float(local_plan_horizon_m) * 0.70))
+        follow_len = None
+        if len(follow_path) >= 2:
+            follow_len = sum(
+                math.hypot(follow_path[i][0] - follow_path[i - 1][0], follow_path[i][1] - follow_path[i - 1][1])
+                for i in range(1, len(follow_path))
+            )
+        try:
+            from agv_bridge.nav_obstacle_preview import compute_dynamic_lookahead_m
+
+            la_m, _la_src = compute_dynamic_lookahead_m(
+                vx=self._cmd_vx or (tgt if tgt is not None else 0.16),
+                follow_path_length_m=follow_len,
+                local_plan_horizon_m=local_plan_horizon_m,
+            )
+        except Exception:
+            la_m = 1.4
+            if local_plan_horizon_m is not None and float(local_plan_horizon_m) > 0.4:
+                spd_la = abs(self._cmd_vx) if abs(self._cmd_vx) > 0.05 else abs(self._mean_vx)
+                la_m = max(0.55, min(2.2, max(0.7, spd_la * 1.25)))
+                la_m = min(la_m, max(0.6, float(local_plan_horizon_m) * 0.70))
         pp_w = pure_pursuit_w(
             x, y, yaw, follow_path, self._cmd_vx or (tgt if tgt is not None else 0.16), lookahead_m=la_m, w_max=self.wz_max
         )

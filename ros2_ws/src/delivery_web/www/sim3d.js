@@ -744,6 +744,21 @@
         const p = dbg.controller.lookahead_point;
         this._addDisk(p.x, p.y, 0.08, 0xec4899, 0.8);
       }
+      if (layers.futurePreview && dbg.obstacle_preview) {
+        const op = dbg.obstacle_preview;
+        const pts = (op.preview_poses || []).map((p) => [p.x, p.y]);
+        if (pts.length >= 2) this._addPolyline(pts, 0xf97316, 0.12);
+        if (op.left_corridor_poses?.length >= 2) {
+          this._addPolyline(op.left_corridor_poses.map((p) => [p.x, p.y]), 0x22d3ee, 0.08);
+        }
+        if (op.right_corridor_poses?.length >= 2) {
+          this._addPolyline(op.right_corridor_poses.map((p) => [p.x, p.y]), 0x22d3ee, 0.08);
+        }
+        if (op.first_collision_distance_m != null && op.collision_pose) {
+          const cp = op.collision_pose;
+          this._addDisk(cp.x, cp.y, 0.10, 0xea580c, 0.85);
+        }
+      }
       const fc = dbg.local_planner?.first_collision;
       if (layers.collision && fc) this._addDisk(fc.x, fc.y, 0.14, 0xdc2626, 0.85);
 

@@ -769,6 +769,10 @@ class NavigationPolicy:
         goal_herr: float = 0.0,
         planned_rejected_by_safety: bool = False,
         safety_zero: bool = False,
+        future_collision: bool = False,
+        approach_active: bool = False,
+        first_collision_distance_m: Optional[float] = None,
+        required_avoidance_distance_m: Optional[float] = None,
     ) -> PolicyDecision:
         evs: List[Dict[str, Any]] = []
         flags: Dict[str, Any] = {}
@@ -885,6 +889,17 @@ class NavigationPolicy:
         elif scene == "APPROACH" or flags.get("VELOCITY_BUT_PATH_STALLED"):
             state, behavior, reason = OBSTACLE_APPROACH, BEH_CAUTION, "OBSTACLE_APPROACH"
             allow_compare = front_near < DEFAULT_GEOM.front_cost_m + 0.55
+        elif approach_active or (
+            future_collision
+            and first_collision_distance_m is not None
+            and required_avoidance_distance_m is not None
+            and first_collision_distance_m < required_avoidance_distance_m
+        ):
+            state, behavior, reason = OBSTACLE_APPROACH, BEH_CAUTION, "FUTURE_COLLISION→OBSTACLE_APPROACH"
+            allow_compare = True
+            flags["future_collision"] = True
+            flags["first_collision_distance_m"] = first_collision_distance_m
+            flags["required_avoidance_distance_m"] = required_avoidance_distance_m
         elif front_near < DEFAULT_GEOM.front_clear_m + 0.5:
             state, behavior, reason = CAUTION, BEH_CAUTION, "CAUTION"
         elif self.obstacle_passed or (

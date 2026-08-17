@@ -682,6 +682,12 @@ def make_handler(www: Path):
                 else:
                     self._json(404, {"success": False, "error": "lookahead forensics unavailable"})
                 return
+            if path in ("/api/nav/obstacle-preview", "/api/nav/obstacle_preview"):
+                if hasattr(APP.state, "get_obstacle_preview"):
+                    self._json(200, APP.state.get_obstacle_preview())
+                else:
+                    self._json(404, {"success": False, "error": "obstacle preview unavailable"})
+                return
             # P0-B-0 observability APIs
             if path in ("/api/logs", "/api/nav/logs", "/api/logs/events", "/api/nav/logs/events"):
                 if hasattr(APP.state, "get_nav_logs"):

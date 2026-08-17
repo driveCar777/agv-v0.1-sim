@@ -41,6 +41,12 @@ from agv_bridge.nav_local_planner import (
     RollingLocalPlanner,
 )
 from agv_bridge.nav_speed_policy import SpeedPolicy
+from agv_bridge.nav_global_preview import GlobalPreviewCache
+from agv_bridge.nav_obstacle_preview import (
+    compute_future_preview,
+    diagnose_late_avoidance,
+    emit_obstacle_preview_events,
+)
 from agv_bridge.nav_recovery import (
     ACT_CONTINUE,
     ACT_HISTORICAL_RETREAT,
@@ -134,6 +140,8 @@ class LocalMppiModel:
         self.last_local_plan = None
         self.last_local_plan_result = None
         self.last_maneuver_authority = AUTH_ROLLING
+        self.last_future_preview = None
+        self._preview_cache = GlobalPreviewCache()
 
     def set_control_mode(self, mode: str) -> str:
         m = (mode or "mppi").strip().lower()
@@ -166,6 +174,8 @@ class LocalMppiModel:
         self.last_local_plan = None
         self.last_local_plan_result = None
         self.last_maneuver_authority = AUTH_ROLLING
+        self.last_future_preview = None
+        self._preview_cache = GlobalPreviewCache()
 
     def begin_reverse_escape(self, now: float) -> bool:
         """Legacy hook — prefer ManeuverFSM + Policy.allow_recovery."""
@@ -298,6 +308,46 @@ class LocalMppiModel:
         except Exception:
             self.last_probe = None
 
+        ext_passed = bool(getattr(self.maneuver.local_selector, "obstacle_passed", False))
+        gprev_est = 5.0
+        if path_valid and global_path:
+            try:
+                rem = 0.0
+                for i in range(1, len(global_path)):
+                    rem += math.hypot(
+                        global_path[i][0] - global_path[i - 1][0],
+                        global_path[i][1] - global_path[i - 1][1],
+                    )
+                gprev_est = min(5.0, max(0.4, rem))
+            except Exception:
+                gprev_est = 5.0
+        goal_d_preview = math.hypot(goal[0] - x, goal[1] - y) if goal else None
+        try:
+            self.last_future_preview = compute_future_preview(
+                x=x,
+                y=y,
+                yaw=yaw,
+                vx=float(state_vx),
+                global_path=global_path if path_valid else None,
+                path_progress_s=float(path_progress) if path_progress else None,
+                path_revision=int(self._path_version),
+                global_preview_m=gprev_est,
+                goal_distance_m=goal_d_preview,
+                collide=collide,
+                clearance_at=clearance_at,
+                front_near=float(front_near),
+                left_free=float(left_free),
+                right_free=float(right_free),
+                lateral_error=float(lat),
+                geom=self.geom,
+                cache=self._preview_cache,
+                external_obstacle_passed=ext_passed,
+                now=now,
+            )
+        except Exception:
+            self.last_future_preview = None
+        fp = self.last_future_preview
+
         pol = self.policy.step(
             now=now,
             nav_active=nav_active,
@@ -329,6 +379,10 @@ class LocalMppiModel:
             goal_herr=goal_herr,
             planned_rejected_by_safety=planned_rejected_by_safety,
             safety_zero=safety_zero,
+            future_collision=bool(fp.future_collision) if fp is not None else False,
+            approach_active=bool(fp.approach_active) if fp is not None else False,
+            first_collision_distance_m=fp.first_collision_distance_m if fp is not None else None,
+            required_avoidance_distance_m=fp.required_avoidance_distance_m if fp is not None else None,
         )
         self.last_policy = pol
 
@@ -672,10 +726,38 @@ class LocalMppiModel:
                     geom=self.geom,
                     maneuver_mode=mm_pre,
                     authority=authority,
+                    future_preview=fp,
+                    obstacle_pass_state=str(fp.obstacle_pass_state) if fp is not None else "UNKNOWN",
+                    obstacle_passed=bool(fp.obstacle_passed) if fp is not None else ext_passed,
+                    preferred_side_hint=fp.preferred_side if fp is not None else None,
                 )
             )
             self.last_local_plan_result = lp_res
             self.last_local_plan = lp_res.plan
+            try:
+                if fp is not None:
+                    emit_obstacle_preview_events(
+                        fp,
+                        local_plan_id=None if lp_res.plan is None else lp_res.plan.plan_id,
+                        local_plan_authority=authority,
+                        maneuver_mode=mm_pre,
+                        selected_side=(
+                            lp_res.plan.selected_candidate_id if lp_res.plan is not None else None
+                        ),
+                    )
+                    if diagnose_late_avoidance(fp, front_near=float(front_near)):
+                        from agv_bridge.nav_observability import OBS
+
+                        OBS.emit(
+                            "LATE_AVOIDANCE_SUSPECTED",
+                            level="WARN",
+                            category="PLANNING",
+                            component="obstacle_preview",
+                            data={**fp.to_dict(), "front_near": float(front_near)},
+                            min_interval_s=2.0,
+                        )
+            except Exception:
+                pass
             try:
                 from agv_bridge.nav_observability import OBS
 

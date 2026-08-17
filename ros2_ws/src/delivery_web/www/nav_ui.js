@@ -121,6 +121,7 @@
           ["footprints", "Foot"],
           ["sectors", "Radar"],
           ["lookahead", "LA"],
+          ["futurePreview", "FutPrev"],
           ["collision", "Coll"],
         ].forEach(([k, lab]) => {
           const labEl = document.createElement("label");

@@ -85,6 +85,7 @@ def patch_mock_state(state) -> None:
     state._kinematic_validation: Dict[str, Any] = {}
     state._open_space_forensics: Dict[str, Any] = {}
     state._lookahead_forensics: Dict[str, Any] = {}
+    state._obstacle_preview: Dict[str, Any] = {}
     state._local_plan: Dict[str, Any] = {}
     state._last_kv_id = ""
     state._last_kv_status = ""
@@ -843,6 +844,19 @@ def patch_mock_state(state) -> None:
             dbg["local_plan"] = lp_dict or {}
             dbg["speed_policy"] = spd_obj.to_dict() if spd_obj is not None and hasattr(spd_obj, "to_dict") else {}
             dbg["maneuver_authority"] = getattr(local_mppi, "last_maneuver_authority", None)
+            fp_obj = getattr(local_mppi, "last_future_preview", None)
+            if fp_obj is not None and hasattr(fp_obj, "to_dict"):
+                op = fp_obj.to_dict()
+                op["local_plan_id"] = lp_dict.get("plan_id") if isinstance(lp_dict, dict) else None
+                op["local_plan_authority"] = dbg.get("maneuver_authority")
+                op["lookahead_source"] = op.get("lookahead_source") or (
+                    "LOCAL_PLAN" if lp_dict.get("active") else "GLOBAL_PATH"
+                )
+                dbg["obstacle_preview"] = op
+                with state.lock:
+                    state._obstacle_preview = op
+            else:
+                dbg["obstacle_preview"] = {}
             dbg["global_vs_local"] = gvl
             dbg["kinematic_validation"] = kv_api
             with state.lock:
@@ -1269,6 +1283,44 @@ def patch_mock_state(state) -> None:
             "controls_vehicle": False,
         }
 
+    def get_obstacle_preview() -> Dict[str, Any]:
+        """GET /api/nav/obstacle-preview — P0-D forward future obstacle preview."""
+        with state.lock:
+            blob = dict(getattr(state, "_obstacle_preview", {}) or {})
+            dbg = state._debug_snapshot if isinstance(state._debug_snapshot, dict) else {}
+            lp = dict(getattr(state, "_local_plan", {}) or {})
+        if not blob:
+            _refresh_debug_snapshot(time.time())
+            with state.lock:
+                blob = dict(getattr(state, "_obstacle_preview", {}) or {})
+                dbg = state._debug_snapshot if isinstance(state._debug_snapshot, dict) else {}
+                lp = dict(getattr(state, "_local_plan", {}) or {})
+        op = blob or (dbg.get("obstacle_preview") if isinstance(dbg.get("obstacle_preview"), dict) else {})
+        return {
+            "success": True,
+            "future_preview_m": op.get("future_preview_m") or op.get("preview_distance_m"),
+            "first_collision_distance_m": op.get("first_collision_distance_m"),
+            "first_warning_distance_m": op.get("first_warning_distance_m"),
+            "required_avoidance_distance_m": op.get("required_avoidance_distance_m"),
+            "detection_distance_m": op.get("detection_distance_m"),
+            "maneuver_start_distance_m": op.get("maneuver_start_distance_m"),
+            "hard_stop_distance_m": op.get("hard_stop_distance_m"),
+            "left_valid": op.get("left_valid"),
+            "right_valid": op.get("right_valid"),
+            "forward_valid": op.get("forward_valid"),
+            "left_clearance": op.get("left_clearance"),
+            "right_clearance": op.get("right_clearance"),
+            "forward_clearance": op.get("forward_clearance"),
+            "obstacle_pass_state": op.get("obstacle_pass_state"),
+            "lookahead_source": op.get("lookahead_source"),
+            "lookahead_distance": op.get("lookahead_distance_m"),
+            "local_plan_id": lp.get("plan_id") or op.get("local_plan_id"),
+            "local_plan_authority": op.get("local_plan_authority") or dbg.get("maneuver_authority"),
+            "obstacle_preview": op or {},
+            "generated_at": time.time(),
+            "controls_vehicle": False,
+        }
+
     state.get_nav_debug = get_nav_debug
     state.set_debug_level = set_debug_level
     state.set_debug_freeze = set_debug_freeze
@@ -1285,6 +1337,7 @@ def patch_mock_state(state) -> None:
     state.get_nav_local_plan = get_nav_local_plan
     state.get_open_space_forensics = get_open_space_forensics
     state.get_lookahead_forensics = get_lookahead_forensics
+    state.get_obstacle_preview = get_obstacle_preview
     state._refresh_debug_snapshot = _refresh_debug_snapshot
     def _physics_loop() -> None:
         dt = 0.05
