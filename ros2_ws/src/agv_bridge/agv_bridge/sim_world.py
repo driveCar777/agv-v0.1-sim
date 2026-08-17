@@ -13,6 +13,7 @@ from typing import Any, Deque, Dict, List, Optional, Tuple
 from agv_bridge.smap_loader import (
     LoadedSmap,
     MapPOI,
+    build_m32_open_straight,
     build_outdoor_campus,
     default_smap_candidates,
     load_smap,
@@ -136,6 +137,19 @@ class SimWorld:
         self.emit("scene_outdoor", f"公开园区 · 点云 {len(loaded.cloud)}")
         return loaded
 
+    def load_m32_open_straight(self) -> LoadedSmap:
+        loaded = build_m32_open_straight(plan_res=0.4, inflate_m=0.28)
+        self._clear_poi_cells(loaded, clear_r=1.0)
+        with self.lock:
+            self.map = loaded
+            self.scene_id = "m32_open_straight"
+            self.dyn_obstacles = []
+            self.scenario_movers = []
+            self._actors_enabled = False
+            self.actors = []
+        self.emit("scene_indoor", f"M3.2 open straight · runway 50m")
+        return loaded
+
     @staticmethod
     def _clear_poi_cells(loaded: LoadedSmap, clear_r: float = 0.7) -> None:
         """仅清除规划层 occupied，保留 occupied_raw。
@@ -155,6 +169,8 @@ class SimWorld:
             m = self.load_indoor()
         elif scene_id in ("outdoor", "outdoor_campus", "campus"):
             m = self.load_outdoor()
+        elif scene_id in ("m32_open_straight", "M32-OPEN-STRAIGHT", "open_straight"):
+            m = self.load_m32_open_straight()
         else:
             return {"success": False, "message": f"unknown scene {scene_id}"}
         with self.lock:
@@ -199,6 +215,13 @@ class SimWorld:
                 "label": "室外 · 公开园区",
                 "path_color": "#3B82F6",
                 "description": "离线公开园区/停车场场景",
+            },
+            {
+                "id": "m32_open_straight",
+                "kind": "open",
+                "label": "M3.2 · Open Straight Baseline",
+                "path_color": "#22C55E",
+                "description": "50m obstacle-free runway for baseline validity",
             },
         ]
 

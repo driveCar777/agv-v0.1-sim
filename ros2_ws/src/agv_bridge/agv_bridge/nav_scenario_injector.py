@@ -16,7 +16,11 @@ from agv_bridge.sim_world import SimWorld
 
 Pt = Tuple[float, float]
 
-# Shared baseline corridor — LM1→LM5: short reachable segment on indoor map.
+# M3.2 open straight baseline — 50m runway, no temp/dynamic obstacles.
+M32_OPEN_START = {"poi": "M32_A", "x": -25.0, "y": 0.0}
+M32_OPEN_GOAL = {"poi": "M32_B", "x": 25.0, "y": 0.0}
+
+# Shared indoor baseline corridor — LM1→LM5 (M3.1; not valid for tracking proof).
 BASELINE_START = {"poi": "LM1", "x": 6.26, "y": -0.659}
 BASELINE_GOAL = {"poi": "LM5", "x": 4.506, "y": 0.265}
 
@@ -65,6 +69,7 @@ class ScenarioSpec:
     start: Dict[str, float]
     goal: Dict[str, float]
     disable_actors: bool = True
+    map_scene: str = "indoor_office"
     pre_obstacles: List[Dict[str, Any]] = field(default_factory=list)
     post_setup: Optional[Callable[[LiveClient, SimWorld, Pt, float], None]] = None
     inject_delay_s: float = 0.0
@@ -226,9 +231,18 @@ SCENARIOS: Dict[str, ScenarioSpec] = {
         inject_delay_s=1.0,
         inject_fn=_inject_field_p0d1,
     ),
+    "M32-OPEN-STRAIGHT": ScenarioSpec(
+        scene_id="M32-OPEN-STRAIGHT",
+        label="OPEN-STRAIGHT",
+        description="M3.2 open runway M32_A→M32_B, no obstacles, global tracking only",
+        start=dict(M32_OPEN_START),
+        goal=dict(M32_OPEN_GOAL),
+        map_scene="m32_open_straight",
+    ),
 }
 
 ALL_SCENES = ["LIVE-00", "LIVE-01", "LIVE-02", "LIVE-03", "LIVE-04", "LIVE-05", "LIVE-06"]
+M32_SCENES = ["M32-OPEN-STRAIGHT"]
 
 
 def reset_scenario(client: LiveClient, world: SimWorld) -> dict:
@@ -260,8 +274,7 @@ def apply_scenario(client: LiveClient, world: SimWorld, scene_id: str) -> dict:
         return {"success": False, "message": f"unknown scene {scene_id}"}
 
     reset_scenario(client, world)
-    # Full scene reset respawns AGV and clears nav FSM (safer than set_pose alone).
-    client.post("/api/scene", {"id": "indoor_office"})
+    client.post("/api/scene", {"id": spec.map_scene})
     time.sleep(0.45)
     if spec.disable_actors:
         client.post("/api/scenario/actors", {"enabled": False})

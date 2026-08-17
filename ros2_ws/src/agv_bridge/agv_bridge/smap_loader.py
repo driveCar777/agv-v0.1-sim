@@ -254,6 +254,63 @@ def build_outdoor_campus(plan_res: float = 0.4) -> LoadedSmap:
     )
 
 
+def build_m32_open_straight(plan_res: float = 0.4, inflate_m: float = 0.28) -> LoadedSmap:
+    """M3.2 open straight baseline — wide empty corridor, boundary walls only.
+
+    Start M32_A (-25, 0) → Goal M32_B (25, 0): 50 m straight segment through
+    obstacle-free center. Enters WorldModel/planner like any smap scene.
+    """
+    min_x, min_y, max_x, max_y = -50.0, -50.0, 50.0, 50.0
+    pts: List[Tuple[float, float]] = []
+    occupied: set = set()
+
+    def mark_rect(x0: float, y0: float, x1: float, y1: float, step: float = 0.4) -> None:
+        x = min(x0, x1)
+        while x <= max(x0, x1):
+            y = min(y0, y1)
+            while y <= max(y0, y1):
+                pts.append((x, y))
+                occupied.add(
+                    (int(math.floor((x - min_x) / plan_res)), int(math.floor((y - min_y) / plan_res)))
+                )
+                y += step
+            x += step
+
+    # Perimeter only — center runway (-25..25, ±15) stays free
+    wall_th = 1.6
+    for x in range(-50, 51):
+        mark_rect(float(x), -50.0, float(x), -50.0 + wall_th)
+        mark_rect(float(x), 50.0 - wall_th, float(x), 50.0)
+    for y in range(-50, 51):
+        mark_rect(-50.0, float(y), -50.0 + wall_th, float(y))
+        mark_rect(50.0 - wall_th, float(y), 50.0, float(y))
+
+    occupied_raw = set(occupied)
+    occupied, actual_inflate = _inflate_meters(occupied, plan_res, inflate_m)
+    pois = [
+        MapPOI("M32_A", -25.0, 0.0, "M32Start", yaw=0.0),
+        MapPOI("M32_B", 25.0, 0.0, "M32Goal", yaw=0.0),
+    ]
+    return LoadedSmap(
+        name="m32_open_straight",
+        path="builtin:m32_open_straight",
+        min_x=min_x,
+        min_y=min_y,
+        max_x=max_x,
+        max_y=max_y,
+        resolution=0.05,
+        cloud=_downsample(pts, 6000),
+        occupied=occupied,
+        occupied_raw=occupied_raw,
+        plan_res=plan_res,
+        pois=pois,
+        scene_kind="open",
+        path_color="#22C55E",
+        requested_inflate_m=float(inflate_m),
+        actual_inflate_m=float(actual_inflate),
+    )
+
+
 def default_smap_candidates() -> List[Path]:
     # .../V0.1仿真版/ros2_ws/src/agv_bridge/agv_bridge/smap_loader.py
     here = Path(__file__).resolve()
