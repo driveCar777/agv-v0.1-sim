@@ -274,7 +274,20 @@ All required audits **PASS** including `_trace_phase4_recovery_corrective_live.p
 
 ---
 
-## 17. Artifacts
+**LIVE trace:** `logs/live_lookahead_reverse/live_forensics_20260817_154345.jsonl`
+
+## Code Audit Index (commit `25653215fbc6fb64d0a33555ff2a2078d3539bd5`)
+
+1. Display lookahead — https://github.com/driveCar777/agv-v0.1-sim/blob/25653215fbc6fb64d0a33555ff2a2078d3539bd5/ros2_ws/src/agv_bridge/agv_bridge/sim_api_ext.py
+2. Pure Pursuit / PP meta — https://github.com/driveCar777/agv-v0.1-sim/blob/25653215fbc6fb64d0a33555ff2a2078d3539bd5/ros2_ws/src/agv_bridge/agv_bridge/mppi_controller.py
+3. Rolling Local Planner — https://github.com/driveCar777/agv-v0.1-sim/blob/25653215fbc6fb64d0a33555ff2a2078d3539bd5/ros2_ws/src/agv_bridge/agv_bridge/nav_local_planner.py
+4. Breadcrumb — https://github.com/driveCar777/agv-v0.1-sim/blob/25653215fbc6fb64d0a33555ff2a2078d3539bd5/ros2_ws/src/agv_bridge/agv_bridge/nav_breadcrumb.py
+5. Recovery / Historical Retreat — https://github.com/driveCar777/agv-v0.1-sim/blob/25653215fbc6fb64d0a33555ff2a2078d3539bd5/ros2_ws/src/agv_bridge/agv_bridge/nav_recovery.py
+6. UI colors — https://github.com/driveCar777/agv-v0.1-sim/blob/25653215fbc6fb64d0a33555ff2a2078d3539bd5/ros2_ws/src/delivery_web/www/sim3d.js
+7. Lookahead forensics — https://github.com/driveCar777/agv-v0.1-sim/blob/25653215fbc6fb64d0a33555ff2a2078d3539bd5/ros2_ws/src/agv_bridge/agv_bridge/nav_lookahead_forensics.py
+8. LIVE trace — https://github.com/driveCar777/agv-v0.1-sim/blob/25653215fbc6fb64d0a33555ff2a2078d3539bd5/scripts/_trace_phase4_live_lookahead_reverse.py
+9. Lookahead sweep — https://github.com/driveCar777/agv-v0.1-sim/blob/25653215fbc6fb64d0a33555ff2a2078d3539bd5/scripts/_audit_phase4_lookahead_distance_sweep.py
+10. This report — https://github.com/driveCar777/agv-v0.1-sim/blob/25653215fbc6fb64d0a33555ff2a2078d3539bd5/docs/PHASE4_P1_2_LIVE_LOOKAHEAD_REVERSE_FORENSICS_REPORT.md
 
 | Artifact | Path |
 |----------|------|
