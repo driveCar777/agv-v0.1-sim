@@ -392,3 +392,26 @@ Reuses P0-B0 / P0-C.1 forensics (`GET /api/nav/forensics/open-space`):
 
 No Local/MPPI horizon, NOMINAL/SIDE/vx, Safety, Policy, FSM, Recovery, scoring, capture, or reverse changes.  
 **P1 implementation / P0-D / P0-E / 3G not started.**
+
+---
+
+## Code Audit Index
+
+**FULL COMMIT:** `d929f7654dae8a464c9afb12fee2356a175950b1`  
+**SHORT:** `d929f76`  
+**URL:** https://github.com/driveCar777/agv-v0.1-sim/commit/d929f7654dae8a464c9afb12fee2356a175950b1
+
+| # | Topic | Blob |
+|---|-------|------|
+| 1 | Local Maneuver | https://github.com/driveCar777/agv-v0.1-sim/blob/d929f7654dae8a464c9afb12fee2356a175950b1/ros2_ws/src/agv_bridge/agv_bridge/local_maneuver.py |
+| 2 | MPPI | https://github.com/driveCar777/agv-v0.1-sim/blob/d929f7654dae8a464c9afb12fee2356a175950b1/ros2_ws/src/agv_bridge/agv_bridge/mppi_controller.py |
+| 3 | Navigation Policy | https://github.com/driveCar777/agv-v0.1-sim/blob/d929f7654dae8a464c9afb12fee2356a175950b1/ros2_ws/src/agv_bridge/agv_bridge/nav_policy.py |
+| 4 | Pure Pursuit | https://github.com/driveCar777/agv-v0.1-sim/blob/d929f7654dae8a464c9afb12fee2356a175950b1/ros2_ws/src/agv_bridge/agv_bridge/mppi_controller.py#L48 |
+| 5 | Open-space Forensics | https://github.com/driveCar777/agv-v0.1-sim/blob/d929f7654dae8a464c9afb12fee2356a175950b1/ros2_ws/src/agv_bridge/agv_bridge/nav_open_space_forensics.py |
+| 6 | Speed Cost Sweep | https://github.com/driveCar777/agv-v0.1-sim/blob/d929f7654dae8a464c9afb12fee2356a175950b1/scripts/_audit_phase4_open_space_speed_cost.py |
+| 7 | Speed Response | https://github.com/driveCar777/agv-v0.1-sim/blob/d929f7654dae8a464c9afb12fee2356a175950b1/scripts/_audit_phase4_open_space_speed_response.py |
+| 8 | Horizon Coverage | https://github.com/driveCar777/agv-v0.1-sim/blob/d929f7654dae8a464c9afb12fee2356a175950b1/scripts/_audit_phase4_local_horizon_coverage.py |
+| 9 | Observability / API | https://github.com/driveCar777/agv-v0.1-sim/blob/d929f7654dae8a464c9afb12fee2356a175950b1/docs/PHASE4_NAVIGATION_LOG_API.md |
+| 10 | Audit Report | https://github.com/driveCar777/agv-v0.1-sim/blob/d929f7654dae8a464c9afb12fee2356a175950b1/docs/PHASE4_P1_0_LOCAL_PLANNING_ARCHITECTURE_AUDIT.md |
+
+Also: Maneuver FSM `maneuver.py`, stack `nav_models.py`, Safety `sim_api_ext.py` `apply_safety`, Probe `nav_probe.py`.
