@@ -1,0 +1,20 @@
+safety:
+  footprint_safety_margin_m: 0.08
+  front_stop_m: 0.70
+  front_clear_m: 1.20
+  rear_stop_m: 0.55
+  braking_model:
+    reaction_latency_s: null
+    controller_latency_s: null
+    command_latency_s: null
+    max_decel_mps2: null
+    calibration_status: CALIBRATION_REQUIRED
+  safe_vx_reason_codes:
+    - NORMAL
+    - FRONT_CLEARANCE_VETO
+    - REAR_CLEARANCE_VETO
+    - FOOTPRINT_CLEARANCE_VETO
+    - COLLISION_GUARD
+    - MPPI_NO_FEASIBLE_TRAJECTORY
+    - EMERGENCY_STOP
+    - PLANNER_FAILED

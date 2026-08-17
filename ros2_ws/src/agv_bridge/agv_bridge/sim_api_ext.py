@@ -36,6 +36,15 @@ STOP_FAILED = "FAILED"
 STOP_MANUAL = "MANUAL_STOP"
 STOP_NO_GLOBAL = "NO_GLOBAL_PATH"
 
+SAFE_VX_NORMAL = "NORMAL"
+SAFE_VX_FRONT = "FRONT_CLEARANCE_VETO"
+SAFE_VX_REAR = "REAR_CLEARANCE_VETO"
+SAFE_VX_COLLISION = "COLLISION_GUARD"
+SAFE_VX_EMERGENCY = "EMERGENCY_STOP"
+SAFE_VX_FAILED = "PLANNER_FAILED"
+SAFE_VX_FP = "FOOTPRINT_CLEARANCE_VETO"
+SAFE_VX_MPPI = "MPPI_NO_FEASIBLE_TRAJECTORY"
+
 
 def patch_mock_state(state) -> None:
     world = get_world()
@@ -56,6 +65,7 @@ def patch_mock_state(state) -> None:
     state._last_debug_sample_t = 0.0
     state._debug_snapshot: Dict[str, Any] = {}
     state._physical_corridor: Dict[str, Any] = {}
+    state._safe_vx_reason = SAFE_VX_NORMAL
 
     state._cmd_vx = 0.0
     state._cmd_vy = 0.0
@@ -283,37 +293,44 @@ def patch_mock_state(state) -> None:
         *,
         front_near: float,
         rear_near: float,
+        footprint_clearance: Optional[float],
+        mppi_failure_reason: Optional[str],
         colliding: bool,
         emergency: bool,
         phase: str,
-    ) -> Tuple[float, float, str]:
+    ) -> Tuple[float, float, str, str]:
         """最终安全裁决。返回 (vx, w, stop_reason)。所有 Maneuver 必经此门。"""
         reason = STOP_NONE
+        safe_vx_reason = SAFE_VX_NORMAL
         vx, w = cmd_vx, cmd_w
         turning = phase in ("align", "turn_in_place", "reposition", "local_avoid")
         if emergency:
-            return 0.0, 0.0, STOP_EMERGENCY
+            return 0.0, 0.0, STOP_EMERGENCY, SAFE_VX_EMERGENCY
         if phase == "safe_stop":
-            return 0.0, 0.0, STOP_FAILED
+            return 0.0, 0.0, STOP_FAILED, SAFE_VX_FAILED
+        if mppi_failure_reason == SAFE_VX_MPPI:
+            return 0.0, 0.0, STOP_NONE, SAFE_VX_MPPI
         if colliding:
             # SIL: do not invent reverse during align/turn; hard stop and let Maneuver decide
             if turning:
-                return 0.0, 0.0, STOP_COLLISION
+                return 0.0, 0.0, STOP_COLLISION, SAFE_VX_COLLISION
             if rear_near > geom.rear_stop_m + 0.15 and vx >= 0 and phase == "reverse_escape":
-                return -0.10, w * 0.3, STOP_COLLISION
+                return -0.10, w * 0.3, STOP_COLLISION, SAFE_VX_COLLISION
             if vx >= 0:
-                return 0.0, 0.0, STOP_COLLISION
+                return 0.0, 0.0, STOP_COLLISION, SAFE_VX_COLLISION
             # already reversing: keep rear gate below
+        if footprint_clearance is not None and footprint_clearance < geom.safety_margin_m:
+            return 0.0, 0.0, STOP_FRONT, SAFE_VX_FP
         if vx < 0 and rear_near < geom.rear_stop_m:
-            return 0.0, 0.0, STOP_REAR
+            return 0.0, 0.0, STOP_REAR, SAFE_VX_REAR
         # Front obstacle: allow pure yaw during align/turn (vx≈0) if not colliding
         if front_near < geom.front_stop_m and vx >= 0:
             if turning and abs(vx) < 0.04:
-                return 0.0, w, STOP_NONE if abs(w) > 0.02 else STOP_FRONT
-            return 0.0, (w * 0.2 if abs(w) > 1e-6 else 0.0), STOP_FRONT
+                return 0.0, w, STOP_NONE if abs(w) > 0.02 else STOP_FRONT, SAFE_VX_NORMAL if abs(w) > 0.02 else SAFE_VX_FRONT
+            return 0.0, (w * 0.2 if abs(w) > 1e-6 else 0.0), STOP_FRONT, SAFE_VX_FRONT
         if phase == "reverse_escape":
             reason = STOP_REVERSE
-        return vx, w, reason
+        return vx, w, reason, safe_vx_reason
 
     def plan_nav_xy(gx: float, gy: float, gyaw: float = 0.0, target_id: str = "") -> Dict[str, Any]:
         with state.lock:
@@ -1619,6 +1636,10 @@ def patch_mock_state(state) -> None:
                             if getattr(local_mppi, "last_probe", None) is not None:
                                 tel["probe"] = local_mppi.last_probe.to_dict(now)
                                 tel["probe_events"] = list(local_mppi.probe.events[-12:])
+                            if getattr(local_mppi, "last_execution_corridor", None) is not None:
+                                tel["execution_corridor"] = local_mppi.last_execution_corridor.to_dict()
+                            if getattr(local_mppi, "last_avoidance_state", None) is not None:
+                                tel["avoidance_phase"] = local_mppi.last_avoidance_state.to_dict()
                             # STEP 3F — physical corridor / breadcrumb / recovery
                             if getattr(local_mppi, "last_recovery", None) is not None:
                                 tel["recovery"] = local_mppi.last_recovery.to_dict()
@@ -1685,6 +1706,10 @@ def patch_mock_state(state) -> None:
                             if getattr(local_mppi, "last_probe", None) is not None:
                                 tel["probe"] = local_mppi.last_probe.to_dict(now)
                                 tel["probe_events"] = list(local_mppi.probe.events[-12:])
+                            if getattr(local_mppi, "last_execution_corridor", None) is not None:
+                                tel["execution_corridor"] = local_mppi.last_execution_corridor.to_dict()
+                            if getattr(local_mppi, "last_avoidance_state", None) is not None:
+                                tel["avoidance_phase"] = local_mppi.last_avoidance_state.to_dict()
                             if getattr(local_mppi, "last_recovery", None) is not None:
                                 tel["recovery"] = local_mppi.last_recovery.to_dict()
                                 rex = getattr(local_mppi.maneuver, "_recovery_exec", None)
@@ -1733,11 +1758,27 @@ def patch_mock_state(state) -> None:
 
             # Safety
             cmd_before_vx, cmd_before_w = mppi_vx, mppi_w
-            safe_vx, safe_w, safety_reason = apply_safety(
+            mppi_failure_reason = None
+            fp_clearance_now = None
+            try:
+                meta = dict(getattr(local_mppi.mppi, "_last_meta", {}) or {})
+                if str(meta.get("failure_reason") or "") == SAFE_VX_MPPI:
+                    mppi_failure_reason = SAFE_VX_MPPI
+            except Exception:
+                mppi_failure_reason = None
+            try:
+                corr = getattr(local_mppi, "last_execution_corridor", None)
+                if corr is not None:
+                    fp_clearance_now = (corr.metadata or {}).get("current_footprint_clearance_m")
+            except Exception:
+                fp_clearance_now = None
+            safe_vx, safe_w, safety_reason, safe_vx_reason = apply_safety(
                 mppi_vx,
                 mppi_w,
                 front_near=front_near,
                 rear_near=rear_near,
+                footprint_clearance=fp_clearance_now,
+                mppi_failure_reason=mppi_failure_reason,
                 colliding=colliding,
                 emergency=emergency,
                 phase=local_mppi.phase,
@@ -1803,6 +1844,7 @@ def patch_mock_state(state) -> None:
                 state._cmd_w_before_safety = float(cmd_before_w)
                 state._cmd_vx_after_safety = float(safe_vx)
                 state._cmd_w_after_safety = float(safe_w)
+                state._safe_vx_reason = str(safe_vx_reason)
                 state._front_near = float(front_near)
                 state._rear_near = float(rear_near)
                 state._collision = bool(colliding)

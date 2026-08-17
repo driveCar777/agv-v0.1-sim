@@ -1,0 +1,25 @@
+lidar_a:
+  frame_id: null
+  x_m: null
+  y_m: null
+  yaw_deg: null
+  calibration_status: CALIBRATION_REQUIRED
+
+lidar_b:
+  frame_id: null
+  x_m: null
+  y_m: null
+  yaw_deg: null
+  calibration_status: CALIBRATION_REQUIRED
+
+notes:
+  sim_reference_only:
+    lidar_front:
+      x_m: 0.35
+      y_m: 0.0
+      yaw_deg: 0.0
+    lidar_rear:
+      x_m: -0.35
+      y_m: 0.0
+      yaw_deg: 180.0
+  field_values_must_come_from: TF_or_vehicle_calibration
