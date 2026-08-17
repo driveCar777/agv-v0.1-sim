@@ -49,3 +49,53 @@ For each LiDAR:
 4. Command constant forward speed and constant stop from multiple initial speeds.
 5. Command constant yaw turn and derive `max_omega_rad_s`.
 6. Repeat under loaded and unloaded conditions if payload materially changes dynamics.
+
+## M3 Braking Calibration Procedure
+
+Do **not** use a single trial. Record at least 3 runs per speed per payload class.
+
+### Speeds (if field safety allows)
+
+| Trial | Target speed (m/s) | Payload |
+|-------|-------------------|---------|
+| B1 | 0.10 | empty |
+| B2 | 0.15 | empty |
+| B3 | 0.20 | empty |
+| B4 | 0.25 | empty |
+| B5 | 0.30 | empty |
+| B6+ | repeat loaded if applicable | loaded |
+
+### Record per trial
+
+```text
+initial_speed_mps
+command_stop_timestamp
+actual_motion_stop_timestamp
+distance_travelled_after_stop_command_m
+surface
+payload
+battery_pct
+```
+
+### Compute (post-process)
+
+```text
+effective_decel = v0^2 / (2 * stop_distance)
+reaction_latency = time(vx drop) - command_stop_timestamp
+required_stop_distance = v0 * latency + v0^2 / (2 * decel) + margin
+```
+
+### Tooling
+
+```bash
+python scripts/_record_braking_calibration.py --speed 0.20 --payload empty
+```
+
+Output: `logs/braking_calibration/braking_*.jsonl`
+
+Until measured values are approved, keep:
+
+```yaml
+max_decel_mps2: null
+calibration_status: CALIBRATION_REQUIRED
+```

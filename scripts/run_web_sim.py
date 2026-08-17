@@ -714,6 +714,86 @@ def make_handler(www: Path):
                 else:
                     self._json(404, {"success": False, "error": "obstacle preview unavailable"})
                 return
+            if path in ("/api/nav/safety",):
+                try:
+                    snap = APP.snapshot()
+                    nav = snap.get("nav") or {}
+                    safety = snap.get("safety") or {}
+                    dbg = snap.get("debug") or {}
+                    vc = dbg.get("velocity_chain") or {}
+                    self._json(
+                        200,
+                        {
+                            "success": True,
+                            "safe_vx": vc.get("safe_vx") or nav.get("cmd_vx_after_safety"),
+                            "safe_vx_reason": nav.get("safe_vx_reason") or safety.get("safe_vx_reason"),
+                            "requested_vx": nav.get("requested_vx") or vc.get("requested_vx"),
+                            "approved_vx": nav.get("approved_vx") or vc.get("approved_vx"),
+                            "requested_omega": nav.get("requested_omega") or vc.get("requested_omega"),
+                            "approved_omega": nav.get("approved_omega") or vc.get("approved_omega"),
+                            "footprint_clearance_m": nav.get("footprint_clearance_m") or safety.get("footprint_clearance_m"),
+                            "predicted_min_clearance_m": nav.get("predicted_min_clearance_m") or safety.get("predicted_min_clearance_m"),
+                            "front_near": safety.get("front_near"),
+                            "rear_near": safety.get("rear_near"),
+                            "stop_reason": nav.get("stop_reason") or safety.get("stop_reason"),
+                            "nav_ui_severity": nav.get("nav_ui_severity") or safety.get("nav_ui_severity"),
+                            "braking_calibration_status": "CALIBRATION_REQUIRED",
+                        },
+                    )
+                except Exception as exc:
+                    self._json(500, {"success": False, "error": str(exc)})
+                return
+            if path in ("/api/nav/recovery",):
+                try:
+                    snap = APP.snapshot()
+                    nav = snap.get("nav") or {}
+                    dbg = snap.get("debug") or {}
+                    rec = dbg.get("execution_recovery") or dbg.get("recovery") or {}
+                    self._json(
+                        200,
+                        {
+                            "success": True,
+                            "planner_state": nav.get("planner_state") or rec.get("planner_state"),
+                            "planner_failure_reason": nav.get("planner_failure_reason") or rec.get("planner_failure_reason"),
+                            "recovery_state": nav.get("recovery_state") or rec.get("recovery_state"),
+                            "recovery_attempt": nav.get("recovery_attempt") or rec.get("recovery_attempt"),
+                            "recovery_attempts": nav.get("recovery_attempts") or rec.get("recovery_attempts"),
+                            "max_attempts": rec.get("max_attempts"),
+                            "last_recovery_action": rec.get("last_recovery_action"),
+                            "phase": rec.get("phase") or nav.get("phase"),
+                        },
+                    )
+                except Exception as exc:
+                    self._json(500, {"success": False, "error": str(exc)})
+                return
+            if path in ("/api/nav/diagnostics", "/api/nav/state"):
+                try:
+                    snap = APP.snapshot()
+                    nav = snap.get("nav") or {}
+                    dbg = snap.get("debug") or {}
+                    lp = dbg.get("local_planner") or {}
+                    self._json(
+                        200,
+                        {
+                            "success": True,
+                            "nav": nav,
+                            "safety": snap.get("safety"),
+                            "recovery": dbg.get("execution_recovery") or dbg.get("recovery"),
+                            "diagnostics": dbg.get("diagnostics"),
+                            "status": dbg.get("status"),
+                            "velocity_chain": dbg.get("velocity_chain"),
+                            "mppi": {
+                                "candidate_count": lp.get("candidate_count"),
+                                "valid_candidate_count": lp.get("valid_candidate_count"),
+                                "collision_rejected_count": lp.get("collision_rejected_count"),
+                                "constraint_rejected_count": lp.get("constraint_rejected_count"),
+                            },
+                            "execution_corridor": (dbg.get("nav_policy") or {}).get("execution_corridor"),
+                        },
+                    )
+                except Exception as exc:
+                    self._json(500, {"success": False, "error": str(exc)})
+                return
             # P0-B-0 observability APIs
             if path in ("/api/logs", "/api/nav/logs", "/api/logs/events", "/api/nav/logs/events"):
                 if hasattr(APP.state, "get_nav_logs"):
