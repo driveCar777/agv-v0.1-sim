@@ -976,13 +976,32 @@ class NavigationPolicy:
         if mm == "REPOSITION":
             state, behavior, reason = REPOSITION, BEH_REPOSITION, "ACTIVE_REPOSITION"
         if mm == "POST_TURN":
-            state, behavior, reason = PATH_RECAPTURE, BEH_RECAPTURE, "POST_TURN→RECAPTURE"
+            # M3.4: POST_TURN recapture must not steal the approach band.
+            # SIDE_COMMIT requires first_collision_m <= d_commit_m; recapture
+            # turns the heading away and freezes that distance (JSONL evidence).
+            avoid_busy = str(avoidance_phase or "").upper() in (
+                "FUTURE_PREVIEW",
+                "SIDE_PROBE",
+                "SIDE_COMMIT",
+                "OBSTACLE_APPROACH",
+            ) or bool(future_collision)
+            if not avoid_busy:
+                state, behavior, reason = PATH_RECAPTURE, BEH_RECAPTURE, "POST_TURN→RECAPTURE"
         if mm == "SAFE_STOP":
             state, behavior, reason = SAFE_STOP, BEH_SAFE_STOP, "ACTIVE_SAFE_STOP"
 
         # Deviation exceeded → recapture or replan
         corridor_preview = self._corridor_for(state, lateral_error, now)
-        if corridor_preview.exceeded and state not in (RECOVERY, SAFE_STOP, ALIGN, TURN_IN_PLACE):
+        _hold_approach = state in (
+            RECOVERY,
+            SAFE_STOP,
+            ALIGN,
+            TURN_IN_PLACE,
+            FUTURE_PREVIEW,
+            SIDE_PROBE,
+            LOCAL_AVOID,
+        ) or str(avoidance_phase or "").upper() in ("FUTURE_PREVIEW", "SIDE_PROBE", "SIDE_COMMIT")
+        if corridor_preview.exceeded and not _hold_approach:
             if path_valid:
                 state, behavior, reason = PATH_RECAPTURE, BEH_RECAPTURE, "LOCAL_DEVIATION_EXCEEDED→RECAPTURE"
             else:
