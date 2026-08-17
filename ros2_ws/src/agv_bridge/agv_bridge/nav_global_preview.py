@@ -366,8 +366,29 @@ def collect_local_candidates(
     maneuver: Optional[Dict[str, Any]] = None,
     path_candidates: Optional[Sequence[Any]] = None,
     selected: Any = None,
+    rolling_layer: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
-    """Read-only packaging of existing local candidates. Does not rescore."""
+    """Read-only packaging of existing local candidates. Does not rescore.
+
+    Priority: RollingLocalPlanner (P1-1) > LocalManeuverSelector > MPPI fallback.
+    MPPI best-path must not masquerade as the local plan when a rolling plan exists.
+    """
+    if rolling_layer and int(rolling_layer.get("count") or 0) > 0:
+        items = list(rolling_layer.get("items") or [])
+        dists = [float(it.get("distance_m") or 0.0) for it in items]
+        valid_n = sum(1 for it in items if it.get("valid"))
+        return {
+            "count": len(items),
+            "valid_count": valid_n,
+            "max_distance_m": round(max(dists) if dists else 0.0, 3),
+            "mean_distance_m": round(sum(dists) / len(dists), 3) if dists else 0.0,
+            "items": items,
+            "selected_candidate": rolling_layer.get("selected_candidate") or "NONE",
+            "source": "ROLLING_LOCAL_PLANNER",
+            "plan_id": rolling_layer.get("plan_id"),
+            "horizon_s": rolling_layer.get("horizon_s"),
+            "horizon_m": rolling_layer.get("horizon_m"),
+        }
     man = maneuver or {}
     lc = man.get("local_compare") or {}
     items: List[Dict[str, Any]] = []

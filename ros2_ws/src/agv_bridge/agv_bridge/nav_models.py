@@ -13,6 +13,8 @@ from typing import Any, Dict, List, Optional, Tuple
 from agv_bridge.mppi_controller import DiffDriveMppi, MppiResult, get_control_mode
 from agv_bridge.maneuver import (
     ALIGN,
+    LOCAL_LEFT,
+    LOCAL_RIGHT,
     ManeuverFSM,
     POST_TURN,
     REVERSE_ESCAPE,
@@ -30,6 +32,15 @@ from agv_bridge.nav_geometry import (
 from agv_bridge.nav_policy import NavigationPolicy
 from agv_bridge.nav_probe import ProbeEngine, build_obstacle_snapshot
 from agv_bridge.nav_breadcrumb import TrajectoryBreadcrumb
+from agv_bridge.nav_local_planner import (
+    AUTH_AVOIDANCE,
+    AUTH_FSM,
+    AUTH_RECOVERY,
+    AUTH_ROLLING,
+    LocalPlanRequest,
+    RollingLocalPlanner,
+)
+from agv_bridge.nav_speed_policy import SpeedPolicy
 from agv_bridge.nav_recovery import (
     ACT_CONTINUE,
     ACT_HISTORICAL_RETREAT,
@@ -117,6 +128,12 @@ class LocalMppiModel:
         self._prev_progress_s = 0.0
         self._prev_progress_ts = 0.0
         self.last_path_valid = True
+        self.speed_policy = SpeedPolicy(geom=self.geom)
+        self.local_planner = RollingLocalPlanner(geom=self.geom)
+        self.last_speed = None
+        self.last_local_plan = None
+        self.last_local_plan_result = None
+        self.last_maneuver_authority = AUTH_ROLLING
 
     def set_control_mode(self, mode: str) -> str:
         m = (mode or "mppi").strip().lower()
@@ -143,6 +160,12 @@ class LocalMppiModel:
         self.breadcrumb.reset()
         self.last_recovery = None
         self.last_physical_trajectory = None
+        self.speed_policy.reset()
+        self.local_planner.reset()
+        self.last_speed = None
+        self.last_local_plan = None
+        self.last_local_plan_result = None
+        self.last_maneuver_authority = AUTH_ROLLING
 
     def begin_reverse_escape(self, now: float) -> bool:
         """Legacy hook — prefer ManeuverFSM + Policy.allow_recovery."""
@@ -581,6 +604,127 @@ class LocalMppiModel:
             except Exception:
                 pass
 
+        # P1-1: SpeedPolicy + RollingLocalPlanner (recommendation only; FSM owns mode)
+        rec = self.last_recovery
+        rec_act = str(getattr(rec, "action", "") or "")
+        mm_pre = str(decision.mode or "")
+        if want_rev or mm_pre == REVERSE_ESCAPE or rec_act in (ACT_LOCAL_REVERSE, ACT_HISTORICAL_RETREAT):
+            authority = AUTH_RECOVERY
+        elif mm_pre in (LOCAL_LEFT, LOCAL_RIGHT):
+            authority = AUTH_AVOIDANCE
+        elif mm_pre in (ALIGN, TURN_IN_PLACE, SAFE_STOP, POST_TURN):
+            authority = AUTH_FSM
+        else:
+            authority = AUTH_ROLLING
+        self.last_maneuver_authority = authority
+
+        gprev = 5.0
+        if path_valid and global_path:
+            try:
+                rem = 0.0
+                for i in range(1, len(global_path)):
+                    rem += math.hypot(
+                        global_path[i][0] - global_path[i - 1][0],
+                        global_path[i][1] - global_path[i - 1][1],
+                    )
+                gprev = min(5.0, max(0.4, rem))
+            except Exception:
+                gprev = 5.0
+        goal_d = math.hypot(goal[0] - x, goal[1] - y) if goal else None
+        spd = self.speed_policy.compute(
+            scene=str(getattr(pol, "scene", None) or "OPEN"),
+            policy_state=str(getattr(pol, "state", None) or ""),
+            vx_scale=float(getattr(pol.profile, "vx_scale", 1.0) or 1.0),
+            state_vx=float(state_vx),
+            front_near=float(front_near),
+            rear_near=float(rear_near),
+            left_free=float(left_free or 2.0),
+            right_free=float(right_free or 2.0),
+            min_clearance=float(actual_clearance) if actual_clearance is not None else None,
+            goal_distance_m=goal_d,
+            heading_error=float(heading_error),
+            recovery_active=authority == AUTH_RECOVERY,
+            force_reverse=bool(want_rev),
+        )
+        self.last_speed = spd
+
+        try:
+            lp_res = self.local_planner.update(
+                LocalPlanRequest(
+                    x=x,
+                    y=y,
+                    yaw=yaw,
+                    vx=float(state_vx),
+                    global_path=global_path if path_valid else None,
+                    global_preview_m=gprev,
+                    goal=goal,
+                    collide=collide,
+                    clearance_at=clearance_at,
+                    front_near=float(front_near),
+                    left_free=float(left_free or 2.0),
+                    right_free=float(right_free or 2.0),
+                    min_clearance=float(actual_clearance) if actual_clearance is not None else None,
+                    scene=str(getattr(pol, "scene", None) or "OPEN"),
+                    policy_state=str(getattr(pol, "state", None) or ""),
+                    speed=spd,
+                    path_revision=int(self._path_version),
+                    now=now,
+                    geom=self.geom,
+                    maneuver_mode=mm_pre,
+                    authority=authority,
+                )
+            )
+            self.last_local_plan_result = lp_res
+            self.last_local_plan = lp_res.plan
+            try:
+                from agv_bridge.nav_observability import OBS
+
+                for ev in lp_res.events or []:
+                    OBS.emit(
+                        ev,
+                        level="INFO",
+                        category="LOCAL_PLANNING",
+                        component="rolling_local_planner",
+                        data={
+                            "plan_id": None if lp_res.plan is None else lp_res.plan.plan_id,
+                            "horizon_m": None if lp_res.plan is None else lp_res.plan.horizon_m,
+                            "horizon_s": None if lp_res.plan is None else lp_res.plan.horizon_s,
+                            "selected": None if lp_res.plan is None else lp_res.plan.selected_candidate_id,
+                            "authority": authority,
+                            "target_vx": spd.target_vx,
+                        },
+                        min_interval_s=0.35,
+                    )
+                if authority == AUTH_ROLLING and lp_res.plan is not None:
+                    OBS.emit(
+                        "MPPI_TRACKING_LOCAL_PLAN",
+                        level="INFO",
+                        category="LOCAL_PLANNING",
+                        component="mppi",
+                        data={"plan_id": lp_res.plan.plan_id, "target_vx": spd.target_vx},
+                        min_interval_s=1.0,
+                    )
+                OBS.emit(
+                    "SPEED_TARGET_UPDATED",
+                    level="INFO",
+                    category="LOCAL_PLANNING",
+                    component="speed_policy",
+                    data=spd.to_dict(),
+                    min_interval_s=0.8,
+                )
+            except Exception:
+                pass
+        except Exception:
+            self.last_local_plan_result = None
+
+        track_plan = (
+            authority == AUTH_ROLLING
+            and self.last_local_plan is not None
+            and bool(self.last_local_plan.kinematic_valid)
+            and len(self.last_local_plan.poses or []) >= 2
+        )
+        local_xy = self.last_local_plan.as_xy() if track_plan else None
+
         res = self.mppi.step(
             x,
             y,
@@ -599,6 +743,10 @@ class LocalMppiModel:
             force_w=decision.force_w,
             path_follow_weight=pol.path_follow_weight,
             vx_scale=pol.profile.vx_scale,
+            target_vx=None if authority != AUTH_ROLLING else (None if self.last_speed is None else self.last_speed.target_vx),
+            local_plan_path=local_xy,
+            local_plan_id=None if not track_plan else self.last_local_plan.plan_id,
+            local_plan_horizon_m=None if not track_plan else self.last_local_plan.horizon_m,
         )
         self.policy.note_cmd_w(now, res.w)
         self.tick_phase(now, res.vx)

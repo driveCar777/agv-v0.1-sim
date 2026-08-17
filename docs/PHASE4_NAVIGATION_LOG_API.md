@@ -14,11 +14,13 @@ Aliases: `/api/logs/...` and `/api/nav/logs/...` are equivalent.
 
 Default `limit <= 200`. Use `since` / `cursor` for incremental fetch.
 
-Preview (read-only): `GET /api/nav/preview` → `global_reference` + `local_candidates` + `selected_local` + `global_vs_local` + `kinematic_validation` + `open_space_forensics`.
+Preview (read-only): `GET /api/nav/preview` → `global_reference` + `local_candidates` + `selected_local` + `local_plan` + `mppi_summary` + `global_vs_local` + `kinematic_validation` + `open_space_forensics`.
 
-Forensics (read-only): `GET /api/nav/forensics/open-space` → full P0-C.1 / P1-0 open-space local planning forensics blob (`controls_vehicle=false`).
+Local plan (read-only, same fact source): `GET /api/nav/local-plan`.
 
-P1-0 diagnostic extras (assemble-only): `mppi.speed_target` (soft 0.22), `diagnostics.local_selector_role_in_open`, `diagnostics.open_space_cruise_speed`, `diagnostics.planned_distance_m` / `rendered_distance_m` / `executed_distance_m`. See `docs/PHASE4_P1_0_LOCAL_PLANNING_ARCHITECTURE_AUDIT.md`.
+Forensics (read-only): `GET /api/nav/forensics/open-space` → full P0-C.1 / P1-0/P1-1 open-space blob (`controls_vehicle=false`).
+
+P1-1: RollingLocalPlanner + SpeedPolicy. `mppi.target_vx` from SpeedPolicy (OPEN cruise default 0.30 via `NAV_OPEN_CRUISE_VX`). Local candidates source `ROLLING_LOCAL_PLANNER` when a rolling plan exists. LocalManeuverSelector remains avoidance-only.
 
 Env: `NAV_GLOBAL_PREVIEW=0` disables Global Preview build (telemetry empty / DISABLED); control unchanged.
 

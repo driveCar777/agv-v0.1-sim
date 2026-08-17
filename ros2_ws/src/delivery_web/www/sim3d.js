@@ -597,6 +597,15 @@
       group.renderOrder = 1;
     }
 
+    /** P1-1: selected Rolling Local Plan (medium horizon). Distinct from MPPI band. */
+    setLocalPlan(plan) {
+      const group = this._ensureLayerGroup("_localPlanGroup");
+      if (!plan || !plan.poses || plan.poses.length < 2) return;
+      if (plan.active === false) return;
+      this._addLineTo(group, plan.poses, 0x1d4ed8, 0.16, 0.98);
+      group.renderOrder = 2;
+    }
+
     _ensureDebugGroup() {
       if (!this._debugGroup) {
         this._debugGroup = new THREE.Group();

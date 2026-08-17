@@ -147,6 +147,7 @@ class SimApp:
             selected_local = dict(getattr(self.state, "_selected_local", {}) or {})
             kinematic_validation = dict(getattr(self.state, "_kinematic_validation", {}) or {})
             open_space_forensics = dict(getattr(self.state, "_open_space_forensics", {}) or {})
+            local_plan = dict(getattr(self.state, "_local_plan", {}) or {})
             path_rev = int(getattr(self.state, "_global_path_revision", 0) or 0)
         navigating = nav_mode in ("tracking", "avoid", "planned", "planner_debug")
         # 未导航：车周静态点云；导航中：实时雷达点云为主
@@ -257,9 +258,25 @@ class SimApp:
                 "planning": planning_metrics,
                 "path_lateral_error": round(path_lateral, 4),
                 "path_heading_error": round(path_heading, 4),
-                "blue_band_means": "SELECTED local physical trajectory (short horizon); see global_reference for 2-8m map preview",
+                "blue_band_means": "SELECTED local physical trajectory (short horizon); see global_reference for 2-8m map preview; local_plan is RollingLocalPlanner 1-3m",
                 "physical_trajectory": physical_corridor or None,
                 "global_reference": self._preview_summary(global_reference),
+                "local_plan": {
+                    "plan_id": local_plan.get("plan_id"),
+                    "revision": local_plan.get("revision"),
+                    "horizon_s": local_plan.get("horizon_s"),
+                    "horizon_m": local_plan.get("horizon_m"),
+                    "selected_candidate": local_plan.get("selected_candidate"),
+                    "status": local_plan.get("status"),
+                    "active": local_plan.get("active"),
+                    "speed_target": local_plan.get("speed_target"),
+                    "kinematic_valid": local_plan.get("kinematic_valid"),
+                    "min_clearance": local_plan.get("min_clearance"),
+                    "source": "ROLLING_LOCAL_PLANNER",
+                    "poses": (local_plan.get("poses") or [])[:64],
+                }
+                if local_plan
+                else {"active": False, "source": "ROLLING_LOCAL_PLANNER"},
                 "local_candidates": {
                     "count": local_cands_layer.get("count"),
                     "valid_count": local_cands_layer.get("valid_count"),
@@ -646,6 +663,12 @@ def make_handler(www: Path):
                     self._json(200, APP.state.get_nav_preview())
                 else:
                     self._json(404, {"success": False, "error": "preview unavailable"})
+                return
+            if path in ("/api/nav/local-plan", "/api/nav/local_plan"):
+                if hasattr(APP.state, "get_nav_local_plan"):
+                    self._json(200, APP.state.get_nav_local_plan())
+                else:
+                    self._json(404, {"success": False, "error": "local-plan unavailable"})
                 return
             if path in ("/api/nav/forensics/open-space", "/api/nav/forensics/open_space"):
                 if hasattr(APP.state, "get_open_space_forensics"):

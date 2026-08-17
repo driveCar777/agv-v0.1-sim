@@ -243,9 +243,9 @@ def assemble_open_space_forensics(
             "a_vx_max": mppi_meta.get("a_vx_max") if mppi_meta.get("a_vx_max") is not None else mppi_meta.get("vx_max"),
             "wz_max": mppi_meta.get("wz_max"),
             "path_follow_weight": mppi_meta.get("path_follow_weight") or pol_dec.get("path_follow_weight"),
-            # Soft preference only (mppi_controller._score); NOT a hard cruise setpoint
-            "speed_target": 0.22,
-            "speed_target_kind": "SOFT_SPEED_TRACK_COST",
+            # Soft preference from SpeedPolicy (OPEN cruise default 0.30). Not SIDE_VX.
+            "speed_target": mppi_meta.get("target_vx") if mppi_meta.get("target_vx") is not None else 0.30,
+            "speed_target_kind": "SPEED_POLICY_TARGET",
             "best_path_distance_m": None if mppi_path_m is None else round(mppi_path_m, 3),
             "control_mode": control_mode or mppi_meta.get("control_mode") or get_control_mode(),
             "local_replan_period_s": 0.35,

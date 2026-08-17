@@ -84,6 +84,7 @@ def patch_mock_state(state) -> None:
     state._selected_local: Dict[str, Any] = {}
     state._kinematic_validation: Dict[str, Any] = {}
     state._open_space_forensics: Dict[str, Any] = {}
+    state._local_plan: Dict[str, Any] = {}
     state._last_kv_id = ""
     state._last_kv_status = ""
     state._stuck_since = 0.0
@@ -754,10 +755,21 @@ def patch_mock_state(state) -> None:
                 maneuver=maneuver,
                 path_candidates=cands,
                 selected=sel or maneuver.get("decision") or maneuver.get("mode"),
+                rolling_layer=(
+                    local_mppi.local_planner.ui_layer()
+                    if hasattr(local_mppi, "local_planner")
+                    else None
+                ),
             )
+            lp_obj = getattr(local_mppi, "last_local_plan", None)
+            spd_obj = getattr(local_mppi, "last_speed", None)
+            lp_dict = lp_obj.to_dict() if lp_obj is not None and hasattr(lp_obj, "to_dict") else {}
             selected_local = {
                 "candidate_id": loc_layer.get("selected_candidate") or "NONE",
-                "source": "local_compare",
+                "source": loc_layer.get("source") or "local_compare",
+                "plan_id": loc_layer.get("plan_id") or (lp_dict.get("plan_id") if lp_dict else None),
+                "horizon_m": loc_layer.get("horizon_m") or (lp_dict.get("horizon_m") if lp_dict else None),
+                "horizon_s": loc_layer.get("horizon_s") or (lp_dict.get("horizon_s") if lp_dict else None),
             }
             gvl = {
                 "global_preview_m": gref.get("preview_m"),
@@ -827,6 +839,9 @@ def patch_mock_state(state) -> None:
             dbg["global_reference"] = gref
             dbg["local_candidates"] = loc_layer
             dbg["selected_local"] = selected_local
+            dbg["local_plan"] = lp_dict or {}
+            dbg["speed_policy"] = spd_obj.to_dict() if spd_obj is not None and hasattr(spd_obj, "to_dict") else {}
+            dbg["maneuver_authority"] = getattr(local_mppi, "last_maneuver_authority", None)
             dbg["global_vs_local"] = gvl
             dbg["kinematic_validation"] = kv_api
             with state.lock:
@@ -834,6 +849,7 @@ def patch_mock_state(state) -> None:
                 state._local_candidates_layer = loc_layer
                 state._selected_local = selected_local
                 state._kinematic_validation = kv_api
+                state._local_plan = lp_dict or {}
             try:
                 from agv_bridge.nav_observability import OBS
 
@@ -1097,7 +1113,10 @@ def patch_mock_state(state) -> None:
             sel = dict(getattr(state, "_selected_local", {}) or {})
             kv = dict(getattr(state, "_kinematic_validation", {}) or {})
             fos = dict(getattr(state, "_open_space_forensics", {}) or {})
+            lp = dict(getattr(state, "_local_plan", {}) or {})
+            meta = dict(getattr(state, "_debug_mppi_meta", {}) or {})
             gvl = (state._debug_snapshot or {}).get("global_vs_local") if isinstance(state._debug_snapshot, dict) else {}
+            dbg = state._debug_snapshot if isinstance(state._debug_snapshot, dict) else {}
         if not gref:
             _refresh_debug_snapshot(time.time())
             with state.lock:
@@ -1106,16 +1125,56 @@ def patch_mock_state(state) -> None:
                 sel = dict(getattr(state, "_selected_local", {}) or {})
                 kv = dict(getattr(state, "_kinematic_validation", {}) or {})
                 fos = dict(getattr(state, "_open_space_forensics", {}) or {})
+                lp = dict(getattr(state, "_local_plan", {}) or {})
+                meta = dict(getattr(state, "_debug_mppi_meta", {}) or {})
                 gvl = (state._debug_snapshot or {}).get("global_vs_local") if isinstance(state._debug_snapshot, dict) else {}
+                dbg = state._debug_snapshot if isinstance(state._debug_snapshot, dict) else {}
+        mppi_summary = {
+            "horizon_s": meta.get("horizon_s"),
+            "mean_vx": meta.get("mean_vx_after") or meta.get("mean_vx"),
+            "vx_raw": meta.get("vx_raw"),
+            "vx_cmd": meta.get("vx_cmd"),
+            "target_vx": meta.get("target_vx"),
+            "local_plan_id": meta.get("local_plan_id"),
+            "tracking_local_plan": meta.get("tracking_local_plan"),
+            "control_mode": meta.get("control_mode"),
+        }
         return {
             "success": True,
             "global_reference": gref,
             "local_candidates": loc,
             "selected_local": sel,
+            "local_plan": lp or {},
+            "mppi_summary": mppi_summary,
+            "speed_policy": (dbg.get("speed_policy") if isinstance(dbg, dict) else {}) or {},
             "global_vs_local": gvl or {},
             "kinematic_validation": kv or {},
             "open_space_forensics": fos or {},
             "geometry_version": "p0a",
+            "generated_at": time.time(),
+            "controls_vehicle": False,
+        }
+
+    def get_nav_local_plan() -> Dict[str, Any]:
+        """GET /api/nav/local-plan — same LocalPlan fact source as preview."""
+        prev = get_nav_preview()
+        lp = prev.get("local_plan") or {}
+        return {
+            "success": True,
+            "plan_id": lp.get("plan_id"),
+            "revision": lp.get("revision"),
+            "horizon_s": lp.get("horizon_s"),
+            "horizon_m": lp.get("horizon_m"),
+            "selected_candidate": lp.get("selected_candidate"),
+            "candidates": lp.get("candidates") or [],
+            "active": lp.get("active"),
+            "status": lp.get("status"),
+            "speed_target": lp.get("speed_target"),
+            "min_clearance": lp.get("min_clearance"),
+            "kinematic_valid": lp.get("kinematic_valid"),
+            "local_plan": lp,
+            "global_reference": prev.get("global_reference") or {},
+            "mppi_summary": prev.get("mppi_summary") or {},
             "generated_at": time.time(),
             "controls_vehicle": False,
         }
@@ -1148,11 +1207,12 @@ def patch_mock_state(state) -> None:
     state.get_nav_api_logs = get_nav_api_logs
     state.configure_nav_logs = configure_nav_logs
     state.get_nav_preview = get_nav_preview
+    state.get_nav_local_plan = get_nav_local_plan
     state.get_open_space_forensics = get_open_space_forensics
     state._refresh_debug_snapshot = _refresh_debug_snapshot
     def _physics_loop() -> None:
         dt = 0.05
-        local_period = 0.35
+        local_period = 0.20  # P1-1: planner 5Hz; physics remains 20Hz. Do not reuse legacy 0.35s.
         while True:
             time.sleep(dt)
             world.step_actors(dt)

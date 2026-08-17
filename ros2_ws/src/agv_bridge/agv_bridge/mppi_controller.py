@@ -201,8 +201,12 @@ class DiffDriveMppi:
         front_near: float,
         front_cost_m: float,
         path_follow_weight: float = 5.0,
+        target_vx: Optional[float] = None,
     ) -> Tuple[float, str, Dict[str, Any]]:
-        """Return (cost, mode, debug_meta). path_follow_weight from NavigationPolicy profile."""
+        """Return (cost, mode, debug_meta). path_follow_weight from NavigationPolicy profile.
+
+        target_vx comes from SpeedPolicy (OPEN cruise default 0.30). Not SIDE_VX / not 0.22.
+        """
         if len(path) < 2:
             return 1e6, "invalid", {"cost_breakdown": {}, "collision": True, "first_collision": None}
         cost = 0.0
@@ -245,7 +249,8 @@ class DiffDriveMppi:
             cost += reverse_cost
             mode = "reverse"
         else:
-            speed_track_cost = 0.25 * abs(mean_vx - 0.22)
+            spd_tgt = 0.30 if target_vx is None else float(target_vx)
+            speed_track_cost = 0.25 * abs(mean_vx - spd_tgt)
             cost += speed_track_cost
             mode = "forward"
         w_cost = 2.4 * abs(mean_w)
@@ -356,10 +361,16 @@ class DiffDriveMppi:
         force_w: Optional[float] = None,
         path_follow_weight: float = 5.0,
         vx_scale: float = 1.0,
+        target_vx: Optional[float] = None,
+        local_plan_path: Optional[List[Pt]] = None,
+        local_plan_id: Optional[str] = None,
+        local_plan_horizon_m: Optional[float] = None,
     ) -> MppiResult:
         mode = control_mode or get_control_mode()
         self._path_follow_weight = float(path_follow_weight)
         self._vx_scale = max(0.2, min(1.0, float(vx_scale)))
+        self._target_vx = None if target_vx is None else float(target_vx)
+        self._local_plan_id = local_plan_id
         mean_vx_before = float(self._mean_vx)
         mean_dw_before = float(self._mean_dw)
         # Maneuver-constrained action space (defaults to controller limits)
@@ -509,8 +520,23 @@ class DiffDriveMppi:
         elif not allow_rev and self._mean_vx < 0.0:
             self._mean_vx = max(0.0, self._mean_vx)
 
+        # P1-1: sample around SpeedPolicy target, not a frozen 0.16 prior
+        tgt = self._target_vx
+        if tgt is not None and not force_reverse and mmode not in ("REVERSE_ESCAPE",):
+            self._mean_vx = 0.55 * self._mean_vx + 0.45 * float(tgt)
+            self._mean_vx = max(a_vx_min, min(a_vx_max, self._mean_vx))
+            vx_std = max(0.06, min(0.12, 0.07 + 0.12 * abs(float(tgt) - float(self._mean_vx))))
+
+        follow_path = global_path
+        if local_plan_path and len(local_plan_path) >= 2:
+            follow_path = local_plan_path
+        la_m = 1.4
+        if local_plan_horizon_m is not None and float(local_plan_horizon_m) > 0.4:
+            spd_la = abs(self._cmd_vx) if abs(self._cmd_vx) > 0.05 else abs(self._mean_vx)
+            la_m = max(0.55, min(2.2, max(0.7, spd_la * 1.25)))
+            la_m = min(la_m, max(0.6, float(local_plan_horizon_m) * 0.70))
         pp_w = pure_pursuit_w(
-            x, y, yaw, global_path, self._cmd_vx or 0.16, lookahead_m=1.4, w_max=self.wz_max
+            x, y, yaw, follow_path, self._cmd_vx or (tgt if tgt is not None else 0.16), lookahead_m=la_m, w_max=self.wz_max
         )
         if force_w is not None and mmode in ("FORWARD_TURN", "REPOSITION"):
             pp_w = 0.55 * pp_w + 0.45 * float(force_w)
@@ -533,12 +559,13 @@ class DiffDriveMppi:
                 body,
                 vx_seq,
                 w_seq,
-                global_path,
+                follow_path,
                 goal,
                 collide,
                 front_near,
                 self.geom.front_cost_m,
                 path_follow_weight=getattr(self, "_path_follow_weight", 5.0),
+                target_vx=tgt,
             )
             samples.append(
                 {
@@ -565,10 +592,10 @@ class DiffDriveMppi:
         vx_raw = max(a_vx_min, min(a_vx_max, vx_raw))
         dw_raw = max(-0.15, min(0.15, dw_raw))
 
-        self._mean_vx = 0.9 * self._mean_vx + 0.1 * vx_raw
-        self._mean_dw = 0.92 * self._mean_dw + 0.08 * dw_raw
+        self._mean_vx = 0.85 * self._mean_vx + 0.15 * vx_raw
+        self._mean_dw = 0.90 * self._mean_dw + 0.10 * dw_raw
 
-        vx_cmd = 0.82 * self._cmd_vx + 0.18 * self._mean_vx
+        vx_cmd = 0.50 * self._cmd_vx + 0.50 * self._mean_vx
         vx_cmd = max(a_vx_min, min(a_vx_max, vx_cmd))
         w_des = pp_w + 0.35 * self._mean_dw
         # 大航向误差时加快响应，避免 0.12 混合 + 0.03 死区把转向永久掐死
@@ -693,6 +720,10 @@ class DiffDriveMppi:
             "top_k": int(self.top_k),
             "batch_size": int(batch),
             "control_mode": "mppi",
+            "target_vx": None if tgt is None else round(float(tgt), 4),
+            "local_plan_id": local_plan_id,
+            "pp_lookahead_m": round(float(la_m), 3),
+            "tracking_local_plan": bool(local_plan_path and len(local_plan_path) >= 2),
         }
 
         return MppiResult(

@@ -387,6 +387,10 @@
     if (typeof view.setLocalCandidates === 'function') {
       view.setLocalCandidates(locLayer);
     }
+    const lplan = nav.local_plan || (snap.debug && snap.debug.local_plan) || null;
+    if (typeof view.setLocalPlan === 'function') {
+      view.setLocalPlan(lplan);
+    }
     // LAYER: Selected Local Physical Trajectory (short blue band) — unchanged semantics
     const dbg0 = snap.debug || {};
     const navPt = nav.physical_trajectory || null;
