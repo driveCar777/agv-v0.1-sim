@@ -14,7 +14,9 @@ import random
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
+from agv_bridge.nav_execution_corridor import ExecutionCorridor, corridor_allows_omega_sign
 from agv_bridge.nav_geometry import DEFAULT_GEOM, VehicleGeometry
+from agv_bridge.nav_trajectory_validator import REASON_CORRIDOR, validate_trajectory
 
 Pt = Tuple[float, float]
 CollideFn = Callable[[float, float], bool]
@@ -233,6 +235,18 @@ class DiffDriveMppi:
             pts.append((cx, cy))
         return pts
 
+    def _rollout_pose_sequence(
+        self, x: float, y: float, yaw: float, vx_seq: Sequence[float], w_seq: Sequence[float]
+    ) -> List[Dict[str, float]]:
+        poses: List[Dict[str, float]] = [{"x": x, "y": y, "yaw": yaw}]
+        cx, cy, cyaw = x, y, yaw
+        for i in range(len(vx_seq)):
+            cx += vx_seq[i] * math.cos(cyaw) * self.model_dt
+            cy += vx_seq[i] * math.sin(cyaw) * self.model_dt
+            cyaw += w_seq[i] * self.model_dt
+            poses.append({"x": cx, "y": cy, "yaw": cyaw})
+        return poses
+
     def _guide_band(
         self,
         x: float,
@@ -429,6 +443,8 @@ class DiffDriveMppi:
         local_plan_path: Optional[List[Pt]] = None,
         local_plan_id: Optional[str] = None,
         local_plan_horizon_m: Optional[float] = None,
+        execution_corridor: Optional[ExecutionCorridor] = None,
+        clearance_at: Optional[Callable[[float, float], float]] = None,
     ) -> MppiResult:
         mode = control_mode or get_control_mode()
         self._path_follow_weight = float(path_follow_weight)
@@ -590,6 +606,11 @@ class DiffDriveMppi:
             self._mean_vx = 0.55 * self._mean_vx + 0.45 * float(tgt)
             self._mean_vx = max(a_vx_min, min(a_vx_max, self._mean_vx))
             vx_std = max(0.06, min(0.12, 0.07 + 0.12 * abs(float(tgt) - float(self._mean_vx))))
+        if execution_corridor is not None and execution_corridor.active:
+            a_vx_max = min(a_vx_max, float(execution_corridor.max_vx_mps))
+            if execution_corridor.mode == "WAIT":
+                a_vx_min = min(a_vx_min, 0.0)
+                a_vx_max = 0.0
 
         follow_path = global_path
         if local_plan_path and len(local_plan_path) >= 2:
@@ -624,6 +645,11 @@ class DiffDriveMppi:
         if force_w is not None and mmode in ("FORWARD_TURN", "REPOSITION"):
             pp_w = 0.55 * pp_w + 0.45 * float(force_w)
         samples: List[Dict[str, Any]] = []
+        candidate_count = 0
+        valid_candidate_count = 0
+        collision_rejected_count = 0
+        clearance_rejected_count = 0
+        constraint_rejected_count = 0
         for _ in range(batch):
             vx_seq: List[float] = []
             w_seq: List[float] = []
@@ -633,11 +659,57 @@ class DiffDriveMppi:
                 vx = max(a_vx_min, min(a_vx_max, vx + random.gauss(0.0, vx_std)))
                 dw = max(-0.18, min(0.18, dw + random.gauss(0.0, dw_std)))
                 ww = max(-self.wz_max, min(self.wz_max, pp_w + dw))
+                if execution_corridor is not None and execution_corridor.active and not corridor_allows_omega_sign(execution_corridor, ww):
+                    ww = abs(ww) if execution_corridor.mode == "LEFT" else -abs(ww)
                 if force_reverse and random.random() < 0.35:
                     vx = random.uniform(a_vx_min, min(a_vx_max, -0.04))
                 vx_seq.append(vx)
                 w_seq.append(ww)
             body = self._rollout_body(x, y, yaw, vx_seq, w_seq)
+            body_poses = self._rollout_pose_sequence(x, y, yaw, vx_seq, w_seq)
+            candidate_count += 1
+            validation = validate_trajectory(
+                body_poses,
+                collide=collide,
+                clearance_at=clearance_at,
+                geom=self.geom,
+                margin_m=float(self.geom.safety_margin_m),
+                dt=self.model_dt,
+                enforce_limits=False,
+            )
+            if execution_corridor is not None and execution_corridor.active and execution_corridor.constrains_side():
+                w0 = w_seq[0] if w_seq else 0.0
+                if not corridor_allows_omega_sign(execution_corridor, w0):
+                    validation.reject(REASON_CORRIDOR)
+            if not validation.valid:
+                reason = validation.reason
+                if reason == "FOOTPRINT_COLLISION":
+                    collision_rejected_count += 1
+                elif reason == "CLEARANCE_TOO_LOW":
+                    clearance_rejected_count += 1
+                else:
+                    constraint_rejected_count += 1
+                samples.append(
+                    {
+                        "cost": 1e6,
+                        "mode": "invalid",
+                        "vx0": vx_seq[0] if vx_seq else 0.0,
+                        "w0": w_seq[0] if w_seq else 0.0,
+                        "dw0": (w_seq[0] - pp_w) if w_seq else 0.0,
+                        "vx_seq": vx_seq,
+                        "w_seq": w_seq,
+                        "path": body,
+                        "meta": {
+                            "collision": validation.collision.collision,
+                            "first_collision": validation.collision.first_pose,
+                            "clearance_m": validation.minimum_clearance.minimum_clearance_m,
+                            "validator_reason": reason,
+                            "cost_breakdown": {"validator_reject": 1e6, "total": 1e6},
+                        },
+                        "valid": False,
+                    }
+                )
+                continue
             cost, smode, meta = self._score(
                 body,
                 vx_seq,
@@ -650,6 +722,7 @@ class DiffDriveMppi:
                 path_follow_weight=getattr(self, "_path_follow_weight", 5.0),
                 target_vx=tgt,
             )
+            valid_candidate_count += 1
             samples.append(
                 {
                     "cost": cost,
@@ -661,17 +734,50 @@ class DiffDriveMppi:
                     "w_seq": w_seq,
                     "path": body,
                     "meta": meta,
+                    "valid": True,
                 }
             )
 
-        costs = [s["cost"] for s in samples]
+        valid_samples = [s for s in samples if s.get("valid", True)]
+        if not valid_samples:
+            self._cmd_vx = 0.0
+            self._cmd_w = 0.0
+            self._last_pp_w = float(pp_w)
+            self._last_best_cost = 1e6
+            self._last_selected_id = None
+            self._last_first_collision = None
+            self._last_meta = {
+                "batch": batch,
+                "time_steps": n,
+                "model_dt": self.model_dt,
+                "horizon_s": round(n * self.model_dt, 3),
+                "maneuver_mode": mmode or "NONE",
+                "candidate_count": candidate_count,
+                "valid_candidate_count": 0,
+                "collision_rejected_count": collision_rejected_count,
+                "clearance_rejected_count": clearance_rejected_count,
+                "constraint_rejected_count": constraint_rejected_count,
+                "failure_reason": "MPPI_NO_FEASIBLE_TRAJECTORY",
+                "execution_corridor": None if execution_corridor is None else execution_corridor.to_dict(),
+            }
+            return MppiResult(
+                vx=0.0,
+                w=0.0,
+                best_path=[(x, y)],
+                candidates=[],
+                confidence=0.0,
+                mode="invalid",
+                control_mode="mppi",
+            )
+
+        costs = [s["cost"] for s in valid_samples]
         cmin = min(costs)
         weights = [math.exp(-(c - cmin) / self.temperature) for c in costs]
         wsum = sum(weights) + 1e-12
         weights = [w / wsum for w in weights]
 
-        vx_raw = sum(weights[i] * samples[i]["vx0"] for i in range(batch))
-        dw_raw = sum(weights[i] * samples[i]["dw0"] for i in range(batch))
+        vx_raw = sum(weights[i] * valid_samples[i]["vx0"] for i in range(len(valid_samples)))
+        dw_raw = sum(weights[i] * valid_samples[i]["dw0"] for i in range(len(valid_samples)))
         vx_raw = max(a_vx_min, min(a_vx_max, vx_raw))
         dw_raw = max(-0.15, min(0.15, dw_raw))
 
@@ -714,7 +820,7 @@ class DiffDriveMppi:
         reverse = vx_cmd < -0.05
         cmd_mode = "reverse" if reverse else "forward"
 
-        ranked = sorted(samples, key=lambda s: s["cost"])
+        ranked = sorted(valid_samples, key=lambda s: s["cost"])
         best = next((s for s in ranked if s["mode"] == cmd_mode), ranked[0])
         mix = 0.35
         vx_seq_band = [(1.0 - mix) * vx_cmd + mix * best["vx_seq"][i] for i in range(n)]
@@ -802,9 +908,19 @@ class DiffDriveMppi:
             "temperature": round(float(self.temperature), 4),
             "top_k": int(self.top_k),
             "batch_size": int(batch),
+            "candidate_count": int(candidate_count),
+            "valid_candidate_count": int(valid_candidate_count),
+            "collision_rejected_count": int(collision_rejected_count),
+            "clearance_rejected_count": int(clearance_rejected_count),
+            "constraint_rejected_count": int(constraint_rejected_count),
+            "selected_candidate_index": int(candidates[0]["id"]) if candidates else None,
+            "selected_vx": round(float(vx_cmd), 4),
+            "selected_omega": round(float(w_cmd), 4),
+            "failure_reason": None,
             "control_mode": "mppi",
             "target_vx": None if tgt is None else round(float(tgt), 4),
             "local_plan_id": local_plan_id,
+            "execution_corridor": None if execution_corridor is None else execution_corridor.to_dict(),
             "pp_lookahead_m": round(float(la_m), 3),
             "tracking_local_plan": bool(local_plan_path and len(local_plan_path) >= 2),
             "follow_path_source": follow_src,

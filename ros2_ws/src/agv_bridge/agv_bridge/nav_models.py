@@ -47,6 +47,8 @@ from agv_bridge.nav_obstacle_preview import (
     diagnose_late_avoidance,
     emit_obstacle_preview_events,
 )
+from agv_bridge.nav_execution_corridor import build_execution_corridor
+from agv_bridge.nav_footprint import current_footprint_clearance
 from agv_bridge.nav_side_probe import run_side_probe
 from agv_bridge.nav_avoidance_phase import AvoidancePhaseTracker
 from agv_bridge.nav_dynamic_resume import DynamicResumeTracker
@@ -150,6 +152,8 @@ class LocalMppiModel:
         self.dynamic_resume = DynamicResumeTracker()
         self.last_avoidance_state = None
         self.last_dynamic_state = None
+        self.last_execution_corridor = None
+        self._mppi_infeasible_streak = 0
 
     def set_control_mode(self, mode: str) -> str:
         m = (mode or "mppi").strip().lower()
@@ -189,6 +193,8 @@ class LocalMppiModel:
         self.dynamic_resume = DynamicResumeTracker()
         self.last_avoidance_state = None
         self.last_dynamic_state = None
+        self.last_execution_corridor = None
+        self._mppi_infeasible_streak = 0
 
     def begin_reverse_escape(self, now: float) -> bool:
         """Legacy hook — prefer ManeuverFSM + Policy.allow_recovery."""
@@ -415,6 +421,34 @@ class LocalMppiModel:
         except Exception:
             self.last_avoidance_state = None
         av = self.last_avoidance_state
+        try:
+            current_fp_clearance = current_footprint_clearance(
+                {"x": x, "y": y, "yaw": yaw},
+                clearance_at,
+                self.geom,
+            ).minimum_clearance_m
+        except Exception:
+            current_fp_clearance = None
+        try:
+            self.last_execution_corridor = build_execution_corridor(
+                now=now,
+                avoidance_phase=str(av.phase) if av is not None else "OPEN",
+                committed_side=committed_side,
+                preferred_side=(sp.preferred_side if sp is not None else None),
+                commit_ready=bool(sp.commit_ready) if sp else False,
+                front_near=float(front_near),
+                left_free=float(left_free),
+                right_free=float(right_free),
+                probe_confidence_left=float(sp.left_confidence) if sp else 0.0,
+                probe_confidence_right=float(sp.right_confidence) if sp else 0.0,
+                geom=self.geom,
+                source="AVOIDANCE_PHASE",
+                reason="PROBE_COMMIT" if sp and sp.commit_ready else "PHASE_TRACKING",
+            )
+            if self.last_execution_corridor is not None:
+                self.last_execution_corridor.metadata["current_footprint_clearance_m"] = current_fp_clearance
+        except Exception:
+            self.last_execution_corridor = None
 
         dyn_resume_clear = False
         try:
@@ -840,6 +874,7 @@ class LocalMppiModel:
                     preferred_side_hint=sp.preferred_side if sp is not None else (fp.preferred_side if fp else None),
                     side_commit_ready=bool(sp.commit_ready) if sp else False,
                     avoidance_phase=str(av.phase) if av is not None else "OPEN",
+                    execution_corridor=self.last_execution_corridor,
                 )
             )
             self.last_local_plan_result = lp_res
@@ -972,7 +1007,27 @@ class LocalMppiModel:
             local_plan_path=local_xy,
             local_plan_id=None if not track_plan else self.last_local_plan.plan_id,
             local_plan_horizon_m=None if not track_plan else self.last_local_plan.horizon_m,
+            execution_corridor=self.last_execution_corridor,
+            clearance_at=clearance_at,
         )
+        failure_reason = str(getattr(self.mppi, "_last_meta", {}).get("failure_reason") or "")
+        if failure_reason == "MPPI_NO_FEASIBLE_TRAJECTORY":
+            self._mppi_infeasible_streak += 1
+            if self.last_execution_corridor is not None:
+                self.last_execution_corridor.reason = "MPPI_INFEASIBLE_REPROBE"
+                self.last_execution_corridor.metadata["recovery_state"] = "REPROBE"
+                self.last_execution_corridor.metadata["recovery_attempt"] = self._mppi_infeasible_streak
+            if self._mppi_infeasible_streak >= 2:
+                try:
+                    self.policy.note_replan(now)
+                except Exception:
+                    pass
+                if self.last_execution_corridor is not None:
+                    self.last_execution_corridor.metadata["recovery_state"] = "REPLAN"
+            if self._mppi_infeasible_streak >= MAX_RECOVERY_ATTEMPTS and self.last_execution_corridor is not None:
+                self.last_execution_corridor.metadata["recovery_state"] = "SAFE_STOP_PENDING"
+        else:
+            self._mppi_infeasible_streak = 0
         self.policy.note_cmd_w(now, res.w)
         self.tick_phase(now, res.vx)
 

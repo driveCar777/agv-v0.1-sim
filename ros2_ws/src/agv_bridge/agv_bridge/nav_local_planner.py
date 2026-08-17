@@ -15,10 +15,12 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
+from agv_bridge.nav_execution_corridor import ExecutionCorridor, MODE_LEFT, MODE_RIGHT
 from agv_bridge.nav_footprint import trajectory_collision
 from agv_bridge.nav_geometry import DEFAULT_GEOM, VehicleGeometry, get_vehicle_geometry
 from agv_bridge.nav_kinematic import W_MAX_CONTROL, control_limits
 from agv_bridge.nav_speed_policy import OPEN_CRUISE_VX, SpeedPolicyResult
+from agv_bridge.nav_trajectory_validator import validate_trajectory
 from agv_bridge.path_progress import project_pose_to_path
 
 try:
@@ -121,6 +123,7 @@ class LocalPlanRequest:
     preferred_side_hint: Optional[str] = None
     side_commit_ready: bool = False
     avoidance_phase: str = "OPEN"
+    execution_corridor: Optional[ExecutionCorridor] = None
 
 
 @dataclass
@@ -148,6 +151,7 @@ class LocalCandidate:
     reconnect_m: float = 0.0
     recoverability: float = 1.0
     selected: bool = False
+    validator_reason: Optional[str] = None
 
     def to_dict(self, pose_limit: int = 64) -> Dict[str, Any]:
         poses = self.poses[: max(8, int(pose_limit))]
@@ -175,6 +179,7 @@ class LocalCandidate:
             "heading_error": round(self.heading_error, 4),
             "reconnect_m": round(self.reconnect_m, 3),
             "recoverability": round(self.recoverability, 3),
+            "validator_reason": self.validator_reason,
             "source": "ROLLING_LOCAL_PLANNER",
         }
 
@@ -463,6 +468,7 @@ class RollingLocalPlanner:
                     goal=req.goal,
                     target_vx=target,
                     scene=req.scene,
+                    execution_corridor=req.execution_corridor,
                     reconnect_gate=bool(
                         not req.obstacle_passed
                         and req.future_preview is not None
@@ -547,6 +553,8 @@ class RollingLocalPlanner:
             candidates=cands,
             note="rolling local plan",
         )
+        if req.execution_corridor is not None:
+            plan.note = f"{plan.note} corridor={req.execution_corridor.mode}"
         return plan
 
     def _rollout(
@@ -568,6 +576,7 @@ class RollingLocalPlanner:
         goal: Optional[Pt],
         target_vx: float,
         scene: str,
+        execution_corridor: Optional[ExecutionCorridor] = None,
         reconnect_gate: bool = False,
     ) -> LocalCandidate:
         poses: List[Pose] = [{"x": round(x, 4), "y": round(y, 4), "yaw": round(yaw, 5)}]
@@ -593,6 +602,7 @@ class RollingLocalPlanner:
             endpoint=end,
             yaw_end=float(end["yaw"]),
         )
+        corridor = execution_corridor
         # Hard kinematic: |w| already clipped by caller
         if abs(w) > min(W_MAX_CONTROL, geom.max_w) + 1e-3:
             cand.valid = False
@@ -600,6 +610,18 @@ class RollingLocalPlanner:
             cand.reject_reason = "OMEGA_LIMIT"
             cand.score = 1e6
             return cand
+
+        if corridor is not None and corridor.active and corridor.constrains_side():
+            if corridor.mode == MODE_LEFT and kind == KIND_RIGHT_ARC:
+                cand.valid = False
+                cand.reject_reason = "CORRIDOR_SIDE_BLOCKED"
+                cand.score = 1e6
+                return cand
+            if corridor.mode == MODE_RIGHT and kind == KIND_LEFT_ARC:
+                cand.valid = False
+                cand.reject_reason = "CORRIDOR_SIDE_BLOCKED"
+                cand.score = 1e6
+                return cand
 
         hit = trajectory_collision(poses, collide, geom, margin_m=0.0)
         if hit.collision:
@@ -632,6 +654,24 @@ class RollingLocalPlanner:
                 cand.reject_reason = "CLEARANCE_TOO_LOW"
                 cand.score = 1e6
                 return cand
+
+        validation = validate_trajectory(
+            poses,
+            collide=collide,
+            clearance_at=clearance_at,
+            geom=geom,
+            margin_m=float(getattr(geom, "safety_margin_m", 0.08) or 0.08),
+            dt=dt,
+        )
+        if not validation.valid:
+            cand.valid = False
+            cand.reject_reason = validation.reason
+            cand.validator_reason = validation.reason
+            cand.score = 1e6
+            cand.collision = validation.collision.collision
+            if cand.min_clearance is None:
+                cand.min_clearance = validation.minimum_clearance.minimum_clearance_m
+            return cand
 
         # Costs — collision already hard-invalid. Do not use huge scores as a substitute.
         s0 = 0.0
