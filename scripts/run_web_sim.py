@@ -23,6 +23,7 @@ SRC = ROOT / "ros2_ws" / "src"
 sys.path.insert(0, str(SRC / "agv_bridge"))
 
 from agv_bridge.robokit_mock_server import (  # noqa: E402
+    API_MOCK_CTRL,
     HEADER_FMT,
     HEADER_SIZE,
     PORT_CONFIG,
@@ -225,6 +226,7 @@ class SimApp:
                 "mode": "live_lidar" if navigating else "panorama_map",
             },
             "obstacles": self.world.obstacle_list(),
+            "scenario_movers": self.world.scenario_mover_list(),
             "actors": self.world.actor_list(),
             "chronicle": self.world.recent_chronicle(15),
             "banner": banner,
@@ -933,6 +935,37 @@ def make_handler(www: Path):
                 return
             if path == "/api/obstacles/clear":
                 self._json(200, APP.world.clear_dyn_obstacles())
+                return
+            if path == "/api/scenario/clear":
+                self._json(200, APP.world.clear_scenario())
+                return
+            if path == "/api/scenario/actors":
+                enabled = bool(body.get("enabled", True))
+                self._json(200, APP.world.set_actors_enabled(enabled))
+                return
+            if path == "/api/scenario/mover/add":
+                self._json(
+                    200,
+                    APP.world.add_scenario_mover(
+                        str(body.get("name") or ""),
+                        float(body.get("x", 0.0)),
+                        float(body.get("y", 0.0)),
+                        float(body.get("r", 0.35)),
+                        float(body.get("vx", 0.0)),
+                        float(body.get("vy", 0.0)),
+                        str(body.get("kind") or "dynamic"),
+                    ),
+                )
+                return
+            if path == "/api/scenario/setup":
+                from agv_bridge.nav_scenario_injector import apply_scenario
+                from agv_bridge.nav_live_client import NavLiveClient
+
+                client = NavLiveClient(host=APP.host)
+                self._json(200, apply_scenario(client, APP.world, str(body.get("scene") or body.get("id") or "")))
+                return
+            if path == "/api/mock/control":
+                self._json(200, APP.tcp.call(PORT_CONFIG, API_MOCK_CTRL, body))
                 return
             if path in ("/api/pois/add", "/api/poi/add"):
                 self._json(

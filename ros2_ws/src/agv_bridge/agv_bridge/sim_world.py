@@ -92,6 +92,9 @@ class SimWorld:
         self._extra_pois: Dict[str, List[MapPOI]] = {}
         # 动态参与物（行人/小车等），参与雷达，不永久改地图
         self.actors: List[Dict[str, Any]] = []
+        self._actors_enabled = True
+        # M3.1 deterministic scenario movers (LiDAR-visible, stepped each tick)
+        self.scenario_movers: List[Dict[str, Any]] = []
         self._actor_last_t = time.time()
         self._last_plan_metrics: Optional[Dict[str, Any]] = None
         self._last_raw_path: List[Tuple[float, float]] = []
@@ -290,6 +293,66 @@ class SimWorld:
             self.dyn_obstacles = []
             return {"success": True, "removed": n}
 
+    def clear_scenario(self) -> Dict[str, Any]:
+        """Remove injected static + scripted movers; does not restore default actors."""
+        with self.lock:
+            nd = len(self.dyn_obstacles)
+            nm = len(self.scenario_movers)
+            self.dyn_obstacles = []
+            self.scenario_movers = []
+        return {"success": True, "dyn_removed": nd, "movers_removed": nm}
+
+    def set_actors_enabled(self, enabled: bool) -> Dict[str, Any]:
+        with self.lock:
+            self._actors_enabled = bool(enabled)
+            if not enabled:
+                self.actors = []
+        return {"success": True, "actors_enabled": bool(enabled)}
+
+    def add_scenario_mover(
+        self,
+        name: str,
+        x: float,
+        y: float,
+        r: float = 0.35,
+        vx: float = 0.0,
+        vy: float = 0.0,
+        kind: str = "dynamic",
+    ) -> Dict[str, Any]:
+        with self.lock:
+            nm = name or f"mover_{len(self.scenario_movers) + 1}"
+            self.scenario_movers = [m for m in self.scenario_movers if m.get("name") != nm]
+            mover = {
+                "name": nm,
+                "kind": kind,
+                "x": float(x),
+                "y": float(y),
+                "r": float(max(0.15, r)),
+                "vx": float(vx),
+                "vy": float(vy),
+            }
+            self.scenario_movers.append(mover)
+            return {"success": True, "mover": dict(mover)}
+
+    def scenario_mover_list(self) -> List[Dict[str, Any]]:
+        with self.lock:
+            return [dict(m) for m in self.scenario_movers]
+
+    def step_scenario_movers(self, dt: float) -> None:
+        with self.lock:
+            m = self.map
+            if m is None or not self.scenario_movers:
+                return
+            for mv in self.scenario_movers:
+                nx = float(mv["x"]) + float(mv["vx"]) * dt
+                ny = float(mv["y"]) + float(mv["vy"]) * dt
+                if not m.in_bounds(nx, ny) or self._collides_unlocked(m, nx, ny, float(mv["r"]) + 0.12):
+                    mv["vx"] = -float(mv["vx"])
+                    mv["vy"] = -float(mv["vy"])
+                    nx = float(mv["x"]) + float(mv["vx"]) * dt
+                    ny = float(mv["y"]) + float(mv["vy"]) * dt
+                mv["x"], mv["y"] = nx, ny
+
     def obstacle_list(self) -> List[Dict[str, Any]]:
         with self.lock:
             return [dict(o) for o in self.dyn_obstacles]
@@ -417,9 +480,11 @@ class SimWorld:
         self._actor_last_t = time.time()
 
     def step_actors(self, dt: float | None = None) -> None:
+        use_dt = float(dt if dt is not None else 0.05)
+        self.step_scenario_movers(use_dt)
         with self.lock:
             m = self.map
-            if m is None or not self.actors:
+            if m is None or not self.actors or not self._actors_enabled:
                 return
             now = time.time()
             use_dt = float(dt if dt is not None else max(0.02, min(0.2, now - self._actor_last_t)))
@@ -453,10 +518,12 @@ class SimWorld:
             ]
 
     def _moving_circles(self) -> List[Tuple[float, float, float]]:
-        """动态障碍 + 参与物，供碰撞/雷达。"""
+        """动态障碍 + 参与物 + 场景脚本 mover，供碰撞/雷达。"""
         circles = [(float(o["x"]), float(o["y"]), float(o["r"])) for o in self.dyn_obstacles]
         for a in self.actors:
             circles.append((float(a["x"]), float(a["y"]), float(a["r"])))
+        for mv in self.scenario_movers:
+            circles.append((float(mv["x"]), float(mv["y"]), float(mv["r"])))
         return circles
 
     def map_cloud(self, max_n: int = 8000) -> List[Dict[str, float]]:
