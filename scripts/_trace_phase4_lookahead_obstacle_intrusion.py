@@ -100,7 +100,8 @@ def plan_goal(goal_m: float = 8.0, lateral: float = 0.0) -> Dict[str, Any]:
     gx, gy = bf(x, y, yaw, goal_m, lateral)
     wrap = api("POST", "/api/nav/plan", {"x": gx, "y": gy})
     plan = wrap.get("api") or wrap
-    if int(plan.get("ret_code") or -1) != 0:
+    rc = plan.get("ret_code")
+    if rc is None or int(rc) != 0:
         raise RuntimeError(f"plan failed: {wrap}")
     api("POST", "/api/nav/confirm", {})
     time.sleep(0.8)
