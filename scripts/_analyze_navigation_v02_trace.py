@@ -211,12 +211,20 @@ def _min_clearance_event(rows: List[dict]) -> Optional[dict]:
     return best
 
 
+def _is_baseline_scene(scene: str) -> bool:
+    return scene in ("LIVE-00", "M32-OPEN-STRAIGHT")
+
+
+def _is_obstacle_scene(scene: str) -> bool:
+    return scene.startswith("LIVE-") and scene != "LIVE-00" or scene.startswith("OBS-OPEN-")
+
+
 def _stage_verdict(rows: List[dict], scene: str) -> Dict[str, str]:
     """Per-stage PASS / FAIL / NOT REACHED / N/A from JSONL evidence."""
     samples = _valid_samples(rows)
     tl = _find_timeline(rows)
-    is_baseline = scene == "LIVE-00"
-    is_blocked = scene == "LIVE-03"
+    is_baseline = _is_baseline_scene(scene)
+    is_blocked = scene in ("LIVE-03", "OBS-OPEN-BOTH-BLOCKED")
 
     def reached(key: str) -> bool:
         return tl.get(key) is not None
@@ -250,6 +258,19 @@ def _stage_verdict(rows: List[dict], scene: str) -> Dict[str, str]:
         v["Overall"] = "PASS" if exhausted and reached("T_first_recovery") else "FAIL"
     elif is_baseline:
         v["Overall"] = "PASS" if v["Baseline"] == "PASS" else "FAIL"
+    elif scene.startswith("OBS-OPEN-"):
+        # Open runway: baseline must move; obstacle chain stages apply
+        baseline_ok = moving(samples) and not _nav_failed(samples[: max(1, len(samples) // 4)])
+        v["Baseline"] = "PASS" if baseline_ok else "FAIL"
+        need = ["Detection", "Preview", "Probe", "Commit"]
+        if is_blocked:
+            v["Overall"] = "PASS" if exhausted and reached("T_first_recovery") else "FAIL"
+        elif all(v.get(k) == "PASS" for k in need):
+            v["Overall"] = "PASS"
+        elif any(v.get(k) == "FAIL" for k in v):
+            v["Overall"] = "FAIL"
+        else:
+            v["Overall"] = "PARTIAL"
     else:
         need = ["Detection", "Preview", "Probe", "Commit"]
         if all(v.get(k) == "PASS" for k in need):

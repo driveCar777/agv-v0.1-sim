@@ -98,74 +98,156 @@ def _pillar_and_side_seal(
         _add_obs(client, bx, by, r, f"{prefix}_seal_{i}")
 
 
-def _inject_static_left(client: LiveClient, world: SimWorld, pose: Pt, yaw: float) -> None:
-    px, py, seg_yaw = path_point_at_distance(
-        world, (BASELINE_START["x"], BASELINE_START["y"]), (BASELINE_GOAL["x"], BASELINE_GOAL["y"]), 2.4
-    )
-    _pillar_and_side_seal(client, px, py, seg_yaw, block_side="RIGHT", prefix="live01")
+def _inject_at(
+    client: LiveClient,
+    world: SimWorld,
+    start: Pt,
+    goal: Pt,
+    along_m: float,
+    fn: Callable[[LiveClient, float, float, float, str], None],
+    prefix: str,
+) -> None:
+    px, py, seg_yaw = path_point_at_distance(world, start, goal, along_m)
+    fn(client, px, py, seg_yaw, prefix)
 
 
-def _inject_static_right(client: LiveClient, world: SimWorld, pose: Pt, yaw: float) -> None:
-    px, py, seg_yaw = path_point_at_distance(
-        world, (BASELINE_START["x"], BASELINE_START["y"]), (BASELINE_GOAL["x"], BASELINE_GOAL["y"]), 2.4
-    )
-    _pillar_and_side_seal(client, px, py, seg_yaw, block_side="LEFT", prefix="live02")
+def _inject_static_left_at(client: LiveClient, px: float, py: float, seg_yaw: float, prefix: str) -> None:
+    _pillar_and_side_seal(client, px, py, seg_yaw, block_side="RIGHT", prefix=prefix)
 
 
-def _inject_both_blocked(client: LiveClient, world: SimWorld, pose: Pt, yaw: float) -> None:
-    px, py, seg_yaw = path_point_at_distance(
-        world, (BASELINE_START["x"], BASELINE_START["y"]), (BASELINE_GOAL["x"], BASELINE_GOAL["y"]), 2.2
-    )
-    _add_obs(client, px, py, 0.44, "live03_front")
+def _inject_static_right_at(client: LiveClient, px: float, py: float, seg_yaw: float, prefix: str) -> None:
+    _pillar_and_side_seal(client, px, py, seg_yaw, block_side="LEFT", prefix=prefix)
+
+
+def _inject_both_at(client: LiveClient, px: float, py: float, seg_yaw: float, prefix: str) -> None:
+    _add_obs(client, px, py, 0.44, f"{prefix}_front")
     for i, (fwd, lat, r) in enumerate(
         [(0.85, 0.80, 0.40), (1.10, 1.00, 0.38), (0.85, -0.80, 0.40), (1.10, -1.00, 0.38), (1.25, 0.0, 0.42)]
     ):
         bx, by = body_frame(px, py, seg_yaw, fwd, lat)
-        _add_obs(client, bx, by, r, f"live03_box_{i}")
+        _add_obs(client, bx, by, r, f"{prefix}_box_{i}")
 
 
-def _inject_dynamic_cross(client: LiveClient, world: SimWorld, pose: Pt, yaw: float) -> None:
-    px, py, seg_yaw = path_point_at_distance(
-        world, (BASELINE_START["x"], BASELINE_START["y"]), (BASELINE_GOAL["x"], BASELINE_GOAL["y"]), 2.8
-    )
-    # Cross path: velocity perpendicular to segment (lat + direction)
+def _inject_dynamic_cross_at(client: LiveClient, px: float, py: float, seg_yaw: float, prefix: str) -> None:
     cross_v = 0.55
     vx = -math.sin(seg_yaw) * cross_v
     vy = math.cos(seg_yaw) * cross_v
-    lat_start = -1.2
-    sx, sy = body_frame(px, py, seg_yaw, 0.0, lat_start)
+    sx, sy = body_frame(px, py, seg_yaw, 0.0, -1.2)
     client.post(
         "/api/scenario/mover/add",
-        {"name": "live04_cross", "x": sx, "y": sy, "r": 0.32, "vx": vx, "vy": vy, "kind": "dynamic_cross"},
+        {"name": f"{prefix}_cross", "x": sx, "y": sy, "r": 0.32, "vx": vx, "vy": vy, "kind": "dynamic_cross"},
     )
 
 
-def _inject_dynamic_away(client: LiveClient, world: SimWorld, pose: Pt, yaw: float) -> None:
-    px, py, seg_yaw = path_point_at_distance(
-        world, (BASELINE_START["x"], BASELINE_START["y"]), (BASELINE_GOAL["x"], BASELINE_GOAL["y"]), 2.0
-    )
-    # Ahead on path, moving away along +path direction
+def _inject_dynamic_away_at(client: LiveClient, px: float, py: float, seg_yaw: float, prefix: str) -> None:
     spd = 0.45
     vx = math.cos(seg_yaw) * spd
     vy = math.sin(seg_yaw) * spd
     client.post(
         "/api/scenario/mover/add",
-        {"name": "live05_away", "x": px, "y": py, "r": 0.30, "vx": vx, "vy": vy, "kind": "dynamic_away"},
+        {"name": f"{prefix}_away", "x": px, "y": py, "r": 0.30, "vx": vx, "vy": vy, "kind": "dynamic_away"},
     )
+
+
+def _inject_field_at(client: LiveClient, px: float, py: float, seg_yaw: float, prefix: str) -> None:
+    _add_obs(client, px, py, 0.38, f"{prefix}_pillar")
+    for i, (fwd, lat, r) in enumerate([(0.75, -0.72, 0.36), (1.05, -0.88, 0.34)]):
+        bx, by = body_frame(px, py, seg_yaw, fwd, lat)
+        _add_obs(client, bx, by, r, f"{prefix}_r{i}")
+    bx, by = body_frame(px, py, seg_yaw, 1.0, 1.05)
+    _add_obs(client, bx, by, 0.34, f"{prefix}_left_far")
+
+
+def _inject_ahead_of_pose(
+    client: LiveClient,
+    world: SimWorld,
+    start: dict,
+    goal: dict,
+    pose: Pt,
+    ahead_m: float,
+    kind: str,
+    prefix: str,
+) -> None:
+    """Place obstacle ahead_m along global path from current pose (open-runway friendly)."""
+    s = (float(start["x"]), float(start["y"]))
+    g = (float(goal["x"]), float(goal["y"]))
+    path = world.plan_path(s, g, robot_r=DEFAULT_GEOM.planner_radius)
+    if not path or len(path) < 2:
+        px, py, seg_yaw = path_point_at_distance(world, s, g, ahead_m)
+        _inject_at(client, world, s, g, ahead_m, _KIND_MAP[kind], prefix)
+        return
+    best_i = 0
+    best_d = 1e9
+    for i, p in enumerate(path):
+        d = math.hypot(p[0] - pose[0], p[1] - pose[1])
+        if d < best_d:
+            best_d = d
+            best_i = i
+    acc = 0.0
+    target = max(0.0, ahead_m)
+    inject_i = best_i
+    for i in range(best_i, len(path) - 1):
+        seg = math.hypot(path[i + 1][0] - path[i][0], path[i + 1][1] - path[i][1])
+        if acc + seg >= target:
+            inject_i = i + 1
+            break
+        acc += seg
+        inject_i = i + 1
+    px, py = float(path[inject_i][0]), float(path[inject_i][1])
+    nxt = path[min(inject_i + 1, len(path) - 1)]
+    seg_yaw = math.atan2(nxt[1] - path[inject_i][1], nxt[0] - path[inject_i][0])
+    _KIND_MAP[kind](client, px, py, seg_yaw, prefix)
+
+
+_KIND_MAP = {
+    "static_left": _inject_static_left_at,
+    "static_right": _inject_static_right_at,
+    "both": _inject_both_at,
+    "dynamic_cross": _inject_dynamic_cross_at,
+    "dynamic_away": _inject_dynamic_away_at,
+    "field": _inject_field_at,
+}
+
+
+def _route_inject(start: dict, goal: dict, along_m: float, kind: str, prefix: str):
+    s = (float(start["x"]), float(start["y"]))
+    g = (float(goal["x"]), float(goal["y"]))
+
+    def fn(client: LiveClient, world: SimWorld, pose: Pt, yaw: float) -> None:
+        _inject_at(client, world, s, g, along_m, _KIND_MAP[kind], prefix)
+
+    return fn
+
+
+def _route_inject_ahead(start: dict, goal: dict, ahead_m: float, kind: str, prefix: str):
+    def fn(client: LiveClient, world: SimWorld, pose: Pt, yaw: float) -> None:
+        _inject_ahead_of_pose(client, world, start, goal, pose, ahead_m, kind, prefix)
+
+    return fn
+
+
+def _inject_static_left(client: LiveClient, world: SimWorld, pose: Pt, yaw: float) -> None:
+    _route_inject(BASELINE_START, BASELINE_GOAL, 2.4, "static_left", "live01")(client, world, pose, yaw)
+
+
+def _inject_static_right(client: LiveClient, world: SimWorld, pose: Pt, yaw: float) -> None:
+    _route_inject(BASELINE_START, BASELINE_GOAL, 2.4, "static_right", "live02")(client, world, pose, yaw)
+
+
+def _inject_both_blocked(client: LiveClient, world: SimWorld, pose: Pt, yaw: float) -> None:
+    _route_inject(BASELINE_START, BASELINE_GOAL, 2.2, "both", "live03")(client, world, pose, yaw)
+
+
+def _inject_dynamic_cross(client: LiveClient, world: SimWorld, pose: Pt, yaw: float) -> None:
+    _route_inject(BASELINE_START, BASELINE_GOAL, 2.8, "dynamic_cross", "live04")(client, world, pose, yaw)
+
+
+def _inject_dynamic_away(client: LiveClient, world: SimWorld, pose: Pt, yaw: float) -> None:
+    _route_inject(BASELINE_START, BASELINE_GOAL, 2.0, "dynamic_away", "live05")(client, world, pose, yaw)
 
 
 def _inject_field_p0d1(client: LiveClient, world: SimWorld, pose: Pt, yaw: float) -> None:
-    """Approximate field failure: close obstacle + right seal → heading turn + clearance drop."""
-    px, py, seg_yaw = path_point_at_distance(
-        world, (BASELINE_START["x"], BASELINE_START["y"]), (BASELINE_GOAL["x"], BASELINE_GOAL["y"]), 1.6
-    )
-    _add_obs(client, px, py, 0.38, "live06_pillar")
-    for i, (fwd, lat, r) in enumerate([(0.75, -0.72, 0.36), (1.05, -0.88, 0.34)]):
-        bx, by = body_frame(px, py, seg_yaw, fwd, lat)
-        _add_obs(client, bx, by, r, f"live06_r{i}")
-    # Narrow left gap only
-    bx, by = body_frame(px, py, seg_yaw, 1.0, 1.05)
-    _add_obs(client, bx, by, 0.34, "live06_left_far")
+    _route_inject(BASELINE_START, BASELINE_GOAL, 1.6, "field", "live06")(client, world, pose, yaw)
 
 
 SCENARIOS: Dict[str, ScenarioSpec] = {
@@ -239,10 +321,80 @@ SCENARIOS: Dict[str, ScenarioSpec] = {
         goal=dict(M32_OPEN_GOAL),
         map_scene="m32_open_straight",
     ),
+    "OBS-OPEN-LEFT": ScenarioSpec(
+        scene_id="OBS-OPEN-LEFT",
+        label="OPEN-STATIC-LEFT",
+        description="M32 runway + static obstacle; LEFT detour feasible",
+        start=dict(M32_OPEN_START),
+        goal=dict(M32_OPEN_GOAL),
+        map_scene="m32_open_straight",
+        inject_delay_s=2.0,
+        inject_fn=_route_inject_ahead(M32_OPEN_START, M32_OPEN_GOAL, 4.0, "static_left", "obs_open_l"),
+    ),
+    "OBS-OPEN-RIGHT": ScenarioSpec(
+        scene_id="OBS-OPEN-RIGHT",
+        label="OPEN-STATIC-RIGHT",
+        description="M32 runway + static obstacle; RIGHT detour feasible",
+        start=dict(M32_OPEN_START),
+        goal=dict(M32_OPEN_GOAL),
+        map_scene="m32_open_straight",
+        inject_delay_s=2.0,
+        inject_fn=_route_inject_ahead(M32_OPEN_START, M32_OPEN_GOAL, 4.0, "static_right", "obs_open_r"),
+    ),
+    "OBS-OPEN-BOTH-BLOCKED": ScenarioSpec(
+        scene_id="OBS-OPEN-BOTH-BLOCKED",
+        label="OPEN-BOTH-BLOCKED",
+        description="M32 runway + three-side block → recovery exhausted",
+        start=dict(M32_OPEN_START),
+        goal=dict(M32_OPEN_GOAL),
+        map_scene="m32_open_straight",
+        inject_delay_s=2.0,
+        inject_fn=_route_inject_ahead(M32_OPEN_START, M32_OPEN_GOAL, 3.5, "both", "obs_open_bb"),
+        expect_navigation_failed=True,
+    ),
+    "OBS-OPEN-DYNAMIC-CROSS": ScenarioSpec(
+        scene_id="OBS-OPEN-DYNAMIC-CROSS",
+        label="OPEN-DYNAMIC-CROSS",
+        description="M32 runway + mover crosses path",
+        start=dict(M32_OPEN_START),
+        goal=dict(M32_OPEN_GOAL),
+        map_scene="m32_open_straight",
+        inject_delay_s=1.5,
+        inject_fn=_route_inject_ahead(M32_OPEN_START, M32_OPEN_GOAL, 5.0, "dynamic_cross", "obs_open_cross"),
+    ),
+    "OBS-OPEN-DYNAMIC-AWAY": ScenarioSpec(
+        scene_id="OBS-OPEN-DYNAMIC-AWAY",
+        label="OPEN-DYNAMIC-AWAY",
+        description="M32 runway + mover leaving path ahead",
+        start=dict(M32_OPEN_START),
+        goal=dict(M32_OPEN_GOAL),
+        map_scene="m32_open_straight",
+        inject_delay_s=1.5,
+        inject_fn=_route_inject_ahead(M32_OPEN_START, M32_OPEN_GOAL, 4.0, "dynamic_away", "obs_open_away"),
+    ),
+    "OBS-OPEN-FIELD-P0D1": ScenarioSpec(
+        scene_id="OBS-OPEN-FIELD-P0D1",
+        label="OPEN-FIELD-P0D1",
+        description="M32 runway field-like heading vs footprint divergence",
+        start=dict(M32_OPEN_START),
+        goal=dict(M32_OPEN_GOAL),
+        map_scene="m32_open_straight",
+        inject_delay_s=1.5,
+        inject_fn=_route_inject_ahead(M32_OPEN_START, M32_OPEN_GOAL, 3.5, "field", "obs_open_p0d1"),
+    ),
 }
 
 ALL_SCENES = ["LIVE-00", "LIVE-01", "LIVE-02", "LIVE-03", "LIVE-04", "LIVE-05", "LIVE-06"]
 M32_SCENES = ["M32-OPEN-STRAIGHT"]
+OBS_OPEN_SCENES = [
+    "OBS-OPEN-LEFT",
+    "OBS-OPEN-RIGHT",
+    "OBS-OPEN-BOTH-BLOCKED",
+    "OBS-OPEN-DYNAMIC-CROSS",
+    "OBS-OPEN-DYNAMIC-AWAY",
+    "OBS-OPEN-FIELD-P0D1",
+]
+M33_SCENES = M32_SCENES + OBS_OPEN_SCENES
 
 
 def reset_scenario(client: LiveClient, world: SimWorld) -> dict:

@@ -23,7 +23,7 @@ if BRIDGE not in sys.path:
     sys.path.insert(0, BRIDGE)
 
 from agv_bridge.nav_live_client import NavLiveClient  # noqa: E402
-from agv_bridge.nav_scenario_injector import ALL_SCENES, M32_SCENES, SCENARIOS, apply_scenario  # noqa: E402
+from agv_bridge.nav_scenario_injector import ALL_SCENES, M32_SCENES, M33_SCENES, OBS_OPEN_SCENES, SCENARIOS, apply_scenario  # noqa: E402
 from agv_bridge.sim_world import SimWorld  # noqa: E402
 
 _TRACK_KEYS = (
@@ -49,6 +49,12 @@ _SCENE_FILE_TAG = {
     "LIVE-05": "LIVE-05-dynamic-away",
     "LIVE-06": "LIVE-06-field-p0d1",
     "M32-OPEN-STRAIGHT": "M32-OPEN-STRAIGHT-open",
+    "OBS-OPEN-LEFT": "OBS-OPEN-LEFT-static-left",
+    "OBS-OPEN-RIGHT": "OBS-OPEN-RIGHT-static-right",
+    "OBS-OPEN-BOTH-BLOCKED": "OBS-OPEN-BOTH-blocked",
+    "OBS-OPEN-DYNAMIC-CROSS": "OBS-OPEN-DYNAMIC-cross",
+    "OBS-OPEN-DYNAMIC-AWAY": "OBS-OPEN-DYNAMIC-away",
+    "OBS-OPEN-FIELD-P0D1": "OBS-OPEN-FIELD-p0d1",
 }
 
 
@@ -213,6 +219,13 @@ def _detect_transitions(prev: Optional[dict], cur: dict) -> List[dict]:
     return out
 
 
+def _sync_world_scene(world: SimWorld, map_scene: str) -> None:
+    if map_scene == "m32_open_straight":
+        world.load_m32_open_straight()
+    elif map_scene in ("indoor_office", "indoor", "office"):
+        world.load_indoor()
+
+
 def run_scene(
     client: NavLiveClient,
     world: SimWorld,
@@ -222,6 +235,7 @@ def run_scene(
     seq_start: int,
 ) -> Tuple[List[dict], int, dict, str]:
     spec = SCENARIOS[scene_id]
+    _sync_world_scene(world, spec.map_scene)
     setup = apply_scenario(client, world, scene_id)
     if not setup.get("success"):
         return (
@@ -246,6 +260,7 @@ def run_scene(
             pose = client.get("/api/state").get("agv") or {}
             px, py = float(pose.get("x") or 0), float(pose.get("y") or 0)
             yaw = float(pose.get("angle") or 0)
+            _sync_world_scene(world, spec.map_scene)
             spec.inject_fn(client, world, (px, py), yaw)
             injected = True
             rows.append(
@@ -279,7 +294,7 @@ def run_scene(
 def main() -> int:
     ap = argparse.ArgumentParser(description="V0.2 navigation LIVE trace (M3.1 deterministic scenarios)")
     ap.add_argument("--base", default=os.environ.get("AGV_SIM_BASE", "http://127.0.0.1:19999"))
-    ap.add_argument("--scene", choices=ALL_SCENES + M32_SCENES + ["ALL"], default="LIVE-00")
+    ap.add_argument("--scene", choices=ALL_SCENES + M33_SCENES + ["ALL", "OBS-OPEN-ALL"], default="LIVE-00")
     ap.add_argument("--seconds", type=float, default=20.0)
     ap.add_argument("--hz", type=float, default=5.0)
     ap.add_argument("--out-dir", default=os.path.join(ROOT, "logs", "navigation_v02"))
@@ -295,7 +310,12 @@ def main() -> int:
 
     world = SimWorld()
     os.makedirs(args.out_dir, exist_ok=True)
-    scenes = (ALL_SCENES + M32_SCENES) if args.scene == "ALL" else [args.scene]
+    if args.scene == "ALL":
+        scenes = ALL_SCENES + M33_SCENES
+    elif args.scene == "OBS-OPEN-ALL":
+        scenes = OBS_OPEN_SCENES
+    else:
+        scenes = [args.scene]
 
     written: List[str] = []
     seq = 0
