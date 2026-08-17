@@ -1,4 +1,4 @@
-"""Unified vehicle footprint + swept-volume geometry — P0-A.
+"""Unified vehicle footprint + swept-volume geometry.
 
 VehicleGeometry (nav_geometry.DEFAULT_GEOM) is the ONLY size truth source.
 Radius fields remain BROAD-PHASE approximations; footprint polygon is NARROW-PHASE truth.
@@ -16,6 +16,7 @@ from agv_bridge.nav_geometry import DEFAULT_GEOM, VehicleGeometry
 
 Pt = Tuple[float, float]
 CollideFn = Callable[[float, float], bool]
+ClearanceFn = Callable[[float, float], float]
 PoseLike = Any  # object with .x .y .yaw OR (x,y,yaw) OR dict
 
 # Discrete swept sampling (documented in P0-A report)
@@ -90,6 +91,41 @@ def transform_footprint(
     return out
 
 
+def get_footprint_polygon(
+    pose: PoseLike,
+    geom: VehicleGeometry = DEFAULT_GEOM,
+    *,
+    margin_m: float = 0.0,
+) -> List[Pt]:
+    x, y, yaw = _as_pose(pose)
+    return transform_footprint(x, y, yaw, geom, margin_m=margin_m)
+
+
+def get_inflated_footprint(
+    pose: PoseLike,
+    margin_m: float,
+    geom: VehicleGeometry = DEFAULT_GEOM,
+) -> List[Pt]:
+    return get_footprint_polygon(pose, geom, margin_m=margin_m)
+
+
+def get_corners(
+    pose: PoseLike,
+    geom: VehicleGeometry = DEFAULT_GEOM,
+    *,
+    margin_m: float = 0.0,
+) -> Dict[str, Pt]:
+    poly = get_footprint_polygon(pose, geom, margin_m=margin_m)
+    if len(poly) < 4:
+        return {}
+    return {
+        "front_left": poly[0],
+        "front_right": poly[1],
+        "rear_right": poly[2],
+        "rear_left": poly[3],
+    }
+
+
 def footprint_points(
     x: float,
     y: float,
@@ -141,6 +177,10 @@ def broad_phase_radius(geom: VehicleGeometry = DEFAULT_GEOM, *, kind: str = "loc
     if k == "safety":
         return float(geom.safety_radius)
     return float(geom.local_radius)
+
+
+def get_radius(geom: VehicleGeometry = DEFAULT_GEOM, *, kind: str = "local") -> float:
+    return broad_phase_radius(geom, kind=kind)
 
 
 def interpolate_poses(
@@ -224,6 +264,9 @@ class CollisionResult:
     hit_point: Optional[Pt] = None
     samples_checked: int = 0
     model: str = NARROW_PHASE_MODEL
+    collision_time_s: Optional[float] = None
+    minimum_clearance_m: Optional[float] = None
+    collision_region: Optional[str] = None
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -235,7 +278,47 @@ class CollisionResult:
             else {"x": round(self.hit_point[0], 3), "y": round(self.hit_point[1], 3)},
             "samples_checked": self.samples_checked,
             "model": self.model,
+            "collision_time_s": self.collision_time_s,
+            "minimum_clearance_m": self.minimum_clearance_m,
+            "collision_region": self.collision_region,
         }
+
+
+@dataclass
+class ClearanceResult:
+    minimum_clearance_m: Optional[float] = None
+    clearance_time_s: Optional[float] = None
+    clearance_index: Optional[int] = None
+    closest_point: Optional[Pt] = None
+    region: Optional[str] = None
+    samples_checked: int = 0
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "minimum_clearance_m": self.minimum_clearance_m,
+            "clearance_time_s": self.clearance_time_s,
+            "clearance_index": self.clearance_index,
+            "closest_point": None
+            if self.closest_point is None
+            else {"x": round(self.closest_point[0], 3), "y": round(self.closest_point[1], 3)},
+            "region": self.region,
+            "samples_checked": self.samples_checked,
+        }
+
+
+def _sample_region(sample_idx: int) -> str:
+    mapping = {
+        0: "front_left",
+        1: "front_right",
+        2: "rear_right",
+        3: "rear_left",
+        4: "front_center",
+        5: "rear_center",
+        6: "left_center",
+        7: "right_center",
+        8: "center",
+    }
+    return mapping.get(sample_idx, "unknown")
 
 
 def trajectory_collision(
@@ -257,15 +340,58 @@ def trajectory_collision(
         angular_step_rad=angular_step_rad,
     )
     for i, fp in enumerate(swept):
-        for px, py in fp.samples:
+        for j, (px, py) in enumerate(fp.samples):
             res.samples_checked += 1
             if collide(px, py):
                 res.collision = True
                 res.first_index = i
                 res.first_pose = {"x": fp.x, "y": fp.y, "yaw": fp.yaw}
                 res.hit_point = (px, py)
+                res.collision_region = _sample_region(j)
+                if len(swept) >= 2:
+                    res.collision_time_s = round(float(i), 3)
                 return res
     return res
+
+
+def trajectory_min_clearance(
+    poses: Sequence[PoseLike],
+    clearance_at: ClearanceFn,
+    geom: VehicleGeometry = DEFAULT_GEOM,
+    *,
+    margin_m: float = 0.0,
+    spatial_step_m: float = SWEPT_SPATIAL_STEP_M,
+    angular_step_rad: float = SWEPT_ANGULAR_STEP_RAD,
+) -> ClearanceResult:
+    swept = sample_swept_footprint(
+        poses,
+        geom,
+        margin_m=margin_m,
+        spatial_step_m=spatial_step_m,
+        angular_step_rad=angular_step_rad,
+    )
+    out = ClearanceResult()
+    for i, fp in enumerate(swept):
+        for j, (px, py) in enumerate(fp.samples):
+            out.samples_checked += 1
+            c = float(clearance_at(px, py))
+            if out.minimum_clearance_m is None or c < out.minimum_clearance_m:
+                out.minimum_clearance_m = c
+                out.clearance_index = i
+                out.closest_point = (px, py)
+                out.region = _sample_region(j)
+                out.clearance_time_s = round(float(i), 3)
+    return out
+
+
+def current_footprint_clearance(
+    pose: PoseLike,
+    clearance_at: ClearanceFn,
+    geom: VehicleGeometry = DEFAULT_GEOM,
+    *,
+    margin_m: float = 0.0,
+) -> ClearanceResult:
+    return trajectory_min_clearance([pose], clearance_at, geom, margin_m=margin_m)
 
 
 def sample_rotation_sweep(
