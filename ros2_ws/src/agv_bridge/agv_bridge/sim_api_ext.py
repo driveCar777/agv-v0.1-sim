@@ -1471,10 +1471,19 @@ def patch_mock_state(state) -> None:
     state.get_obstacle_preview = get_obstacle_preview
     state._refresh_debug_snapshot = _refresh_debug_snapshot
     def _physics_loop() -> None:
-        dt = 0.05
+        nominal_dt = 0.05
         local_period = 0.20  # P1-1: planner 5Hz; physics remains 20Hz. Do not reuse legacy 0.35s.
+        last_tick = time.time()
         while True:
-            time.sleep(dt)
+            time.sleep(0.01)
+            now = time.time()
+            dt = now - last_tick
+            if dt < nominal_dt:
+                continue
+            # Planner/debug overrun would otherwise apply only 0.05s of motion per
+            # 0.5–2s wall tick (LIVE traces: 60s → 0.07m). Catch up, clamped.
+            dt = min(0.20, dt)
+            last_tick = now
             world.step_actors(dt)
 
             with state.lock:
@@ -2004,8 +2013,8 @@ def patch_mock_state(state) -> None:
                         _clear_progress_and_recovery()
                         world.emit("arrived", level="success")
 
-            # Debug observability (~20Hz telem via ingest; never affects control)
-            if now - float(getattr(state, "_last_debug_sample_t", 0.0) or 0.0) >= 0.05:
+            # Debug observability (2Hz). 20Hz kinematic snapshot starves integration.
+            if now - float(getattr(state, "_last_debug_sample_t", 0.0) or 0.0) >= 0.50:
                 state._last_debug_sample_t = now
                 _refresh_debug_snapshot(now)
 
