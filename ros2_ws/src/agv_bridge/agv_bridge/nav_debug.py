@@ -224,6 +224,8 @@ def diagnose_why_not_moving(
     best_stop: Optional[Dict[str, Any]],
     path_progress_rate: float = 0.0,
     has_global_path: bool = False,
+    planner_state: str = "NORMAL",
+    safe_vx_reason: str = "NORMAL",
 ) -> Dict[str, Any]:
     secondary: List[str] = []
     primary = "NONE"
@@ -233,7 +235,19 @@ def diagnose_why_not_moving(
     if emergency:
         primary = "EMERGENCY"
         explanation = "Emergency / soft EMC active."
-    elif phase == "safe_stop" or stop_reason == "FAILED" or (
+    elif stop_reason == "NAVIGATION_FAILED" or planner_state == "NAVIGATION_FAILED":
+        primary = "NAVIGATION_FAILED"
+        explanation = f"Navigation failed after recovery exhausted ({recovery_attempts}/{max_recovery})."
+    elif safe_vx_reason == "MPPI_NO_FEASIBLE_TRAJECTORY" or planner_state in (
+        "LOCAL_PLAN_INFEASIBLE",
+        "LOCAL_RECOVERY",
+    ):
+        primary = "LOCAL_PLAN_INFEASIBLE"
+        explanation = f"Local planner infeasible; recovery active (state={planner_state}, reason={safe_vx_reason})."
+    elif stop_reason == "RECOVERY" or safe_vx_reason == "RECOVERY_ACTIVE":
+        primary = "RECOVERY_ACTIVE"
+        explanation = "Recovery ladder active; not navigation failure."
+    elif phase == "safe_stop" or stop_reason in ("FAILED", "SAFE_STOP") or (
         recovery_attempts >= max_recovery and phase in ("safe_stop", "recover")
     ):
         primary = "RECOVERY_EXHAUSTED"
@@ -1317,8 +1331,15 @@ class NavDebugHub:
         ax = float(last.get("ax") or 0.0)
         alpha = float(last.get("alpha") or 0.0)
         rate = float(last.get("path_progress_rate") or 0.0)
+        planner_state = str(last.get("planner_state") or "NORMAL")
+        safe_vx_reason = str(last.get("safe_vx_reason") or "NORMAL")
         motion = str(last.get("motion_state") or classify_motion_state(
-            state_vx=state_vx, state_w=state_w, ax=ax, phase=phase, stop_reason=stop_reason
+            state_vx=state_vx,
+            state_w=state_w,
+            ax=ax,
+            phase=phase,
+            stop_reason=stop_reason,
+            planner_state=planner_state,
         ))
         cmd_vx_v = float(cmd_vx if cmd_vx is not None else mppi_vx)
         cmd_w_v = float(cmd_w if cmd_w is not None else mppi_w)
@@ -1343,6 +1364,8 @@ class NavDebugHub:
             best_stop=stopish,
             path_progress_rate=rate,
             has_global_path=bool(processed_path),
+            planner_state=planner_state,
+            safe_vx_reason=safe_vx_reason,
         )
         pq = diagnose_path_quality(planning or {})
         tracking = diagnose_tracking(
@@ -1427,6 +1450,12 @@ class NavDebugHub:
                 "phase": phase,
                 "control_mode": control_mode,
                 "stop_reason": stop_reason,
+                "planner_state": planner_state,
+                "planner_failure_reason": last.get("planner_failure_reason"),
+                "safe_vx_reason": safe_vx_reason,
+                "recovery_state": last.get("recovery_state"),
+                "recovery_attempt": last.get("recovery_attempt"),
+                "nav_ui_severity": last.get("nav_ui_severity"),
                 "vx": round(state_vx, 4),
                 "w": round(state_w, 4),
                 "goal_distance": round(goal_distance, 3),
@@ -1454,6 +1483,11 @@ class NavDebugHub:
                 "cmd_vx": round(cmd_vx_v, 4),
                 "safe_vx": round(safe_vx, 4),
                 "state_vx": round(state_vx, 4),
+                "requested_vx": round(mppi_vx, 4),
+                "approved_vx": round(safe_vx, 4),
+                "requested_omega": round(mppi_w, 4),
+                "approved_omega": round(safe_w, 4),
+                "safe_vx_reason": safe_vx_reason,
                 "note": diag.get("velocity_chain_note"),
             },
             "diagnostics": diag,
@@ -1579,6 +1613,13 @@ class NavDebugHub:
                 "collision": collision,
                 "emergency": emergency,
                 "obstacle_blocked": stop_reason in ("FRONT_OBSTACLE", "REAR_OBSTACLE", "COLLISION_GUARD"),
+                "safe_vx_reason": safe_vx_reason,
+                "planner_state": planner_state,
+                "planner_failure_reason": last.get("planner_failure_reason"),
+                "recovery_state": last.get("recovery_state"),
+                "footprint_clearance_m": last.get("footprint_clearance_m"),
+                "predicted_min_clearance_m": last.get("predicted_min_clearance_m"),
+                "nav_ui_severity": last.get("nav_ui_severity"),
             }
             out["controller"] = {
                 "pp_lookahead_m": 1.4,
@@ -1603,7 +1644,11 @@ class NavDebugHub:
                 "phase_enter_ts": self.phase_enter_ts,
                 "time_in_phase_s": round(time.time() - self.phase_enter_ts, 2),
                 "recovery_attempts": recovery_attempts,
+                "recovery_attempt": last.get("recovery_attempt"),
                 "max_attempts": MAX_RECOVERY_ATTEMPTS,
+                "planner_state": planner_state,
+                "planner_failure_reason": last.get("planner_failure_reason"),
+                "recovery_state": last.get("recovery_state"),
                 "cooldown_s": RECOVERY_COOLDOWN_S,
                 "reverse_max_s": REVERSE_MAX_S,
                 "stuck_s": round(stuck_s, 2),

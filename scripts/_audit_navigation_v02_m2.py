@@ -193,6 +193,24 @@ def test_mppi_score_uses_footprint_not_center_only() -> None:
     assert "footprint_validated" in src or "validate_trajectory" in src
 
 
+def test_stale_sensor_veto_semantics() -> None:
+    from agv_bridge.recovery.recovery_planner import RecoveryPlanner
+
+    rp = RecoveryPlanner()
+    r = rp.on_planner_failure(now=1.0, failure_reason="MPPI_NO_FEASIBLE_TRAJECTORY", sensor_stale=True)
+    assert r.action == "SAFE_STOP"
+    assert r.reason == "STALE_SENSOR"
+
+
+def test_localization_invalid_veto_semantics() -> None:
+    from agv_bridge.recovery.recovery_planner import RecoveryPlanner
+
+    rp = RecoveryPlanner()
+    r = rp.on_planner_failure(now=1.0, failure_reason="MPPI_NO_FEASIBLE_TRAJECTORY", localization_invalid=True)
+    assert r.action == "SAFE_STOP"
+    assert r.reason == "LOCALIZATION_INVALID"
+
+
 def test_scene_021_field_p0d1_mppi_vx_zero() -> None:
     """Simulate probe→commit→turn→footprint approach→infeasible; must enter recovery not FAILED."""
     from types import SimpleNamespace
@@ -269,6 +287,8 @@ def main() -> int:
         ("TEST_BRAKING_UNAVAILABLE", test_braking_unavailable_conservative),
         ("TEST_MPPI_COLLISION_COUNTERS", test_mppi_footprint_collision_counters),
         ("TEST_MPPI_FOOTPRINT_SCORE", test_mppi_score_uses_footprint_not_center_only),
+        ("TEST_STALE_SENSOR_VETO", test_stale_sensor_veto_semantics),
+        ("TEST_LOCALIZATION_INVALID_VETO", test_localization_invalid_veto_semantics),
         ("SCENE-021-FIELD-P0D1-MPPI-VX-ZERO", test_scene_021_field_p0d1_mppi_vx_zero),
     ]
     failed = 0
