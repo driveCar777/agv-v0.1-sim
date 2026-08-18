@@ -392,8 +392,9 @@
     if (typeof view.setLocalPlan === 'function') {
       view.setLocalPlan(lplan);
     }
-    // LAYER: Selected Local Physical Trajectory (short blue band) — unchanged semantics
+    // LAYER: Future Local Physical Trajectory (Probe corridor) — map frame
     const dbg0 = snap.debug || {};
+    const ti = snap.trajectory_integrity || {};
     const navPt = nav.physical_trajectory || null;
     const dbgPt =
       (dbg0.physical_trajectory && (dbg0.physical_trajectory.active || dbg0.physical_trajectory)) ||
@@ -404,8 +405,12 @@
       : (dbgPt && (dbgPt.left_edge || dbgPt.poses || dbgPt.centerline) ? dbgPt : null);
     if (traj) {
       const poses = traj.poses || traj.centerline || [];
-      const src = String(traj.source || "").toUpperCase();
+      const src = String(traj.source || traj.trajectory_kind || "FUTURE_LOCAL").toUpperCase();
+      const integ = traj.integrity || {};
       let bandColor = '#3B82F6';
+      if (integ.stale || integ.behind_vehicle) {
+        bandColor = '#F59E0B';
+      }
       if (src.includes('RETREAT') || src.includes('BACKWARD') || src.includes('REVERSE')) {
         bandColor = '#38BDF8';
       }
@@ -417,10 +422,15 @@
         right_edge: traj.right_edge,
         swept_polygon: traj.swept_polygon,
         source: src,
-        prefer_blue: true,
+        prefer_blue: !(integ.stale || integ.behind_vehicle),
+        label: integ.stale ? 'STALE FUTURE PLAN' : (integ.behind_vehicle ? 'TRAJ BEHIND VEHICLE' : 'FUTURE LOCAL PLAN'),
       });
     } else {
-      view.setGuideBand(nav.local_path || [], '#3B82F6', {});
+      view.setGuideBand(nav.local_path || [], '#94A3B8', {
+        source: 'EXECUTED_KINEMATIC',
+        prefer_blue: false,
+        label: 'EXECUTED KINEMATIC (not future plan)',
+      });
     }
     view.setObstacles(snap.obstacles || []);
     view.setActors(snap.actors || []);
@@ -443,6 +453,8 @@
     updateScenePill(scene);
     $('#hdrMeta').textContent =
       `${scene.kind || ''} · ${snap.laser?.label || ''} · ${nav.mode || 'idle'}` +
+      (ti.status ? ` · traj=${ti.status}` : '') +
+      (ti.display_source ? ` · display=${ti.display_source}` : '') +
       (nav.confidence != null && nav.mode !== 'idle'
         ? ` · 选中局${Math.round((nav.confidence || 0) * 100)}% · 局候${(nav.local_candidates && nav.local_candidates.count) || (nav.candidates || []).length}`
         : '') +
