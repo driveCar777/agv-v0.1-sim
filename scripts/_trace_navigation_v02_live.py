@@ -24,7 +24,7 @@ if BRIDGE not in sys.path:
     sys.path.insert(0, BRIDGE)
 
 from agv_bridge.nav_live_client import NavLiveClient  # noqa: E402
-from agv_bridge.nav_scenario_injector import ALL_SCENES, M32_SCENES, M33_SCENES, OBS_OPEN_SCENES, ONLINE_SCENES, SCENARIOS, apply_scenario  # noqa: E402
+from agv_bridge.nav_scenario_injector import ALL_SCENES, M32_SCENES, M33_SCENES, MOTION_SCENES, OBS_OPEN_SCENES, ONLINE_SCENES, SCENARIOS, apply_scenario  # noqa: E402
 from agv_bridge.nav_trajectory_integrity import enrich_trajectory_metadata, global_path_fingerprint  # noqa: E402
 from agv_bridge.sim_world import SimWorld  # noqa: E402
 
@@ -102,10 +102,17 @@ def _sample_v02(client: NavLiveClient, seq: int, scene: str, setup_meta: dict) -
     goal = nav.get("goal") or setup_meta.get("goal")
     gpath = nav.get("path") or []
     pt_raw = nav.get("physical_trajectory") if isinstance(nav.get("physical_trajectory"), dict) else {}
+    compute_s = None
+    if pt_raw:
+        pst = pt_raw.get("planner_start_timestamp")
+        pft = pt_raw.get("planner_finish_timestamp")
+        if pst and pft and float(pft) > float(pst):
+            compute_s = float(pft) - float(pst)
     pt = (
         enrich_trajectory_metadata(
             dict(pt_raw),
             vehicle=agv,
+            actual_planner_compute_s=compute_s,
             current_scene_id=nav.get("scene_id") or nav.get("nav_scene_id"),
             current_cycle_id=nav.get("planner_cycle_id") or None,
         )
@@ -270,6 +277,14 @@ def _sample_v02(client: NavLiveClient, seq: int, scene: str, setup_meta: dict) -
         "oscillation_score": ((nav.get("motion") or {}).get("oscillation") or {}).get("oscillation_score") if isinstance(nav.get("motion"), dict) else None,
         "heading_overshoot": ((nav.get("motion") or {}).get("overshoot") or {}).get("heading_overshoot") if isinstance(nav.get("motion"), dict) else None,
         "limit_cycle_suspected": (nav.get("motion") or {}).get("limit_cycle_suspected") if isinstance(nav.get("motion"), dict) else None,
+        "control_eligible": pt.get("control_eligible") if pt else None,
+        "turn_readiness": _dig(nav, "motion", "turn", "turn_readiness") or _dig(nav, "turn", "turn_readiness"),
+        "turn_feasibility": _dig(nav, "motion", "turn", "turn_feasibility") or _dig(nav, "turn", "turn_feasibility"),
+        "turn_required_distance_m": _dig(nav, "motion", "turn", "turn_required_distance_m") or _dig(nav, "turn", "turn_required_distance_m"),
+        "turn_margin_m": _dig(nav, "motion", "turn", "turn_margin_m") or _dig(nav, "turn", "turn_margin_m"),
+        "command_age_ms": _dig(nav, "motion", "turn", "command_age_ms") or _dig(nav, "turn", "command_age_ms"),
+        "max_trajectory_age_ms": integ.get("max_age_ms"),
+        "planner_compute_ms": integ.get("planner_compute_ms"),
     }
     row["trajectory_side"] = _traj_side(row.get("direction_angle") or (pt.get("direction_angle") if pt else None))
     return row
@@ -492,7 +507,7 @@ def run_scene(
 def main() -> int:
     ap = argparse.ArgumentParser(description="V0.2 navigation LIVE trace (M3.1 deterministic scenarios)")
     ap.add_argument("--base", default=os.environ.get("AGV_SIM_BASE", "http://127.0.0.1:19999"))
-    ap.add_argument("--scene", choices=ALL_SCENES + M33_SCENES + ["ALL", "OBS-OPEN-ALL", "ONLINE-ALL"], default="LIVE-00")
+    ap.add_argument("--scene", choices=ALL_SCENES + M33_SCENES + MOTION_SCENES + ["ALL", "OBS-OPEN-ALL", "ONLINE-ALL"], default="LIVE-00")
     ap.add_argument("--seconds", type=float, default=20.0)
     ap.add_argument("--hz", type=float, default=5.0)
     ap.add_argument("--out-dir", default=os.path.join(ROOT, "logs", "navigation_v02"))
