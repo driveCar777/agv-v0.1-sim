@@ -100,9 +100,19 @@ def _sample_v02(client: NavLiveClient, seq: int, scene: str, setup_meta: dict) -
 
     goal = nav.get("goal") or setup_meta.get("goal")
     gpath = nav.get("path") or []
-    pt_raw = nav.get("physical_trajectory") or dbg.get("physical_trajectory") or {}
-    pt = enrich_trajectory_metadata(dict(pt_raw), vehicle=agv) if pt_raw else {}
+    pt_raw = nav.get("physical_trajectory") if isinstance(nav.get("physical_trajectory"), dict) else {}
+    pt = (
+        enrich_trajectory_metadata(
+            dict(pt_raw),
+            vehicle=agv,
+            current_scene_id=nav.get("scene_id") or nav.get("nav_scene_id"),
+            current_cycle_id=nav.get("planner_cycle_id") or None,
+        )
+        if pt_raw
+        else {}
+    )
     integ = pt.get("integrity") or {}
+    retreat = nav.get("retreat_trajectory") or nav.get("historical_retreat") or {}
     lplan = nav.get("local_plan") or dbg.get("local_plan") or {}
     ghash = global_path_fingerprint(gpath)
     safety_collision = safety.get("collision")
@@ -198,18 +208,33 @@ def _sample_v02(client: NavLiveClient, seq: int, scene: str, setup_meta: dict) -
         ),
         "collision": safety_collision,
         "physical_trajectory": pt if pt else None,
-        "trajectory_source": pt.get("source") if pt else None,
-        "trajectory_frame": pt.get("frame_id") if pt else None,
+        "retreat_trajectory": retreat if retreat else None,
+        "trajectory_source": pt.get("trajectory_source") or pt.get("source") if pt else None,
         "trajectory_kind": pt.get("trajectory_kind") if pt else None,
+        "trajectory_control_eligible": pt.get("control_eligible") if pt else None,
+        "trajectory_visualization_only": pt.get("visualization_only") if pt else None,
+        "trajectory_frame": pt.get("frame_id") if pt else None,
         "trajectory_timestamp": pt.get("trajectory_timestamp") if pt else None,
-        "anchor_error_m": integ.get("anchor_error_m"),
+        "trajectory_generated_at": pt.get("trajectory_generated_at") if pt else None,
+        "planner_input_timestamp": pt.get("planner_input_timestamp") or nav.get("planner_input_timestamp"),
+        "planner_start_timestamp": pt.get("planner_start_timestamp") or nav.get("planner_start_timestamp"),
+        "planner_finish_timestamp": pt.get("planner_finish_timestamp") or nav.get("planner_finish_timestamp"),
+        "planner_cycle_id": pt.get("planner_cycle_id") or nav.get("planner_cycle_id"),
+        "trajectory_cycle_id": pt.get("trajectory_cycle_id") or pt.get("planner_cycle_id"),
+        "scene_id": pt.get("scene_id") if pt else nav.get("scene_id") or nav.get("nav_scene_id"),
+        "nav_scene_id": nav.get("nav_scene_id") or nav.get("scene_id"),
+        "anchor_error_m": integ.get("raw_anchor_error_m") if integ.get("raw_anchor_error_m") is not None else integ.get("anchor_error_m"),
         "anchor_yaw_error_deg": integ.get("anchor_yaw_error_deg"),
         "trajectory_age_ms": integ.get("trajectory_age_ms"),
-        "max_anchor_error_m": integ.get("max_anchor_error_m"),
+        "max_anchor_error_m": integ.get("max_reanchor_shift_m") or integ.get("max_anchor_error_m"),
         "trajectory_behind_vehicle": integ.get("behind_vehicle"),
         "trajectory_stale": integ.get("stale"),
+        "integrity_reject": pt.get("integrity_reject") or integ.get("integrity_reject"),
+        "direction_dot": pt.get("direction_dot") or integ.get("direction_dot"),
+        "direction_angle": pt.get("direction_angle") or integ.get("direction_angle_deg"),
         "trajectory_reanchored": pt.get("stale_reanchor_applied") or integ.get("stale_reanchor_applied"),
         "reanchor_shift_m": pt.get("reanchor_shift_m") or integ.get("reanchor_shift_m"),
+        "small_reanchor_applied": pt.get("small_reanchor_applied") or integ.get("small_reanchor_applied"),
         "local_plan_timestamp": lplan.get("generated_at") if isinstance(lplan, dict) else None,
         "local_plan_active": lplan.get("active") if isinstance(lplan, dict) else None,
     }
@@ -395,10 +420,14 @@ def run_scene(
                 critical_stop = "P0_COLLISION"
                 rows.append({"ts": time.time(), "seq": seq, "scene": scene_id, "event": critical_stop, "schema": "navigation_v0.2_trace/3"})
                 seq += 1
-            elif sample.get("trajectory_behind_vehicle") and not sample.get("physical_trajectory", {}).get("integrity", {}).get("stale_reanchor_applied") and not (isinstance(sample.get("physical_trajectory"), dict) and sample["physical_trajectory"].get("stale_reanchor_applied")):
-                critical_stop = "P0_TRAJECTORY_INTEGRITY_FAILURE"
-                rows.append({"ts": time.time(), "seq": seq, "scene": scene_id, "event": critical_stop, "schema": "navigation_v0.2_trace/3"})
-                seq += 1
+            elif sample.get("trajectory_behind_vehicle"):
+                pt_now = sample.get("physical_trajectory") if isinstance(sample.get("physical_trajectory"), dict) else {}
+                still_control = bool(pt_now.get("control_eligible"))
+                masked = bool((pt_now.get("integrity") or {}).get("stale_reanchor_applied") or pt_now.get("stale_reanchor_applied"))
+                if still_control or masked:
+                    critical_stop = "P0_TRAJECTORY_INTEGRITY_FAILURE"
+                    rows.append({"ts": time.time(), "seq": seq, "scene": scene_id, "event": critical_stop, "schema": "navigation_v0.2_trace/3"})
+                    seq += 1
         except (urllib.error.URLError, TimeoutError, json.JSONDecodeError, OSError) as exc:
             rows.append({"ts": time.time(), "seq": seq, "scene": scene_id, "error": str(exc), "schema": "navigation_v0.2_trace/3"})
             seq += 1
