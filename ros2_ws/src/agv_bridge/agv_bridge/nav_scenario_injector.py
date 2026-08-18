@@ -392,6 +392,15 @@ SCENARIOS: Dict[str, ScenarioSpec] = {
         test_class="GLOBAL_PLANNING_AT_START",
     ),
     # M3.8 — ONLINE injection: vehicle must move before obstacle appears (local avoidance test).
+    "SCENE-CURVE-01": ScenarioSpec(
+        scene_id="SCENE-CURVE-01",
+        label="CURVE-APPROACH",
+        description="M3.9 open runway to offset goal — curvature preview then turn",
+        start=dict(M32_OPEN_START),
+        goal={"x": 0.0, "y": 8.0, "poi": "CURVE_01"},
+        map_scene="m32_open_straight",
+        test_class="MOTION_CURVE",
+    ),
     "ONLINE-LEFT": ScenarioSpec(
         scene_id="ONLINE-LEFT",
         label="ONLINE-STATIC-LEFT",
@@ -445,6 +454,7 @@ OBS_OPEN_SCENES = [
     "OBS-OPEN-FIELD-P0D1",
 ]
 ONLINE_SCENES = ["ONLINE-LEFT", "ONLINE-RIGHT", "ONLINE-BOTH-BLOCKED"]
+MOTION_SCENES = ["SCENE-CURVE-01"]
 M33_SCENES = M32_SCENES + OBS_OPEN_SCENES + ONLINE_SCENES
 
 
