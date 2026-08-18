@@ -392,45 +392,46 @@
     if (typeof view.setLocalPlan === 'function') {
       view.setLocalPlan(lplan);
     }
-    // LAYER: Future Local Physical Trajectory (Probe corridor) — map frame
+    // LAYER: Future Local Plan (control-eligible FORWARD_FUTURE only)
     const dbg0 = snap.debug || {};
-    const ti = snap.trajectory_integrity || {};
     const navPt = nav.physical_trajectory || null;
-    const dbgPt =
-      (dbg0.physical_trajectory && (dbg0.physical_trajectory.active || dbg0.physical_trajectory)) ||
-      (dbg0.phase4 && dbg0.phase4.physical_trajectory &&
-        (dbg0.phase4.physical_trajectory.active || dbg0.phase4.physical_trajectory)) ||
-      null;
-    const traj = (navPt && (navPt.left_edge || navPt.poses || navPt.centerline)) ? navPt
-      : (dbgPt && (dbgPt.left_edge || dbgPt.poses || dbgPt.centerline) ? dbgPt : null);
-    if (traj) {
-      const poses = traj.poses || traj.centerline || [];
-      const src = String(traj.source || traj.trajectory_kind || "FUTURE_LOCAL").toUpperCase();
-      const integ = traj.integrity || {};
-      let bandColor = '#3B82F6';
-      if (integ.stale || integ.behind_vehicle) {
-        bandColor = '#F59E0B';
-      }
-      if (src.includes('RETREAT') || src.includes('BACKWARD') || src.includes('REVERSE')) {
-        bandColor = '#38BDF8';
-      }
-      view.setGuideBand(poses, bandColor, {
-        status: traj.status,
-        soft_risk: traj.soft_risk,
-        half_width_m: traj.half_width_m,
-        left_edge: traj.left_edge,
-        right_edge: traj.right_edge,
-        swept_polygon: traj.swept_polygon,
-        source: src,
-        prefer_blue: !(integ.stale || integ.behind_vehicle),
-        label: integ.stale ? 'STALE FUTURE PLAN' : (integ.behind_vehicle ? 'TRAJ BEHIND VEHICLE' : 'FUTURE LOCAL PLAN'),
+    const eligibleFuture = !!(navPt && navPt.control_eligible !== false
+      && String(navPt.trajectory_kind || "") === "FORWARD_FUTURE"
+      && (navPt.left_edge || navPt.poses || navPt.centerline));
+    if (eligibleFuture) {
+      const poses = navPt.poses || navPt.centerline || [];
+      view.setGuideBand(poses, "#3B82F6", {
+        slot: "future",
+        status: navPt.status,
+        soft_risk: navPt.soft_risk,
+        half_width_m: navPt.half_width_m,
+        left_edge: navPt.left_edge,
+        right_edge: navPt.right_edge,
+        swept_polygon: navPt.swept_polygon,
+        source: navPt.trajectory_source || navPt.source || "FORWARD_FUTURE",
+        prefer_blue: true,
+        label: "FUTURE LOCAL PLAN",
       });
     } else {
-      view.setGuideBand(nav.local_path || [], '#94A3B8', {
-        source: 'EXECUTED_KINEMATIC',
+      view.setGuideBand([], "#3B82F6", { slot: "future" });
+    }
+    const retreat = nav.retreat_trajectory || nav.historical_retreat || null;
+    if (retreat && (retreat.poses || retreat.centerline) && retreat.visualization_only !== false) {
+      const rk = String(retreat.trajectory_kind || retreat.source || "").toUpperCase();
+      const histColor = rk.includes("BACKWARD") ? "#A855F7" : "#94A3B8";
+      const histLabel = rk.includes("BACKWARD") ? "BACKWARD (CONTROL BLOCKED)" : "HISTORY / DEBUG";
+      view.setGuideBand(retreat.poses || retreat.centerline || [], histColor, {
+        slot: "history",
+        status: retreat.status,
+        half_width_m: retreat.half_width_m,
+        left_edge: retreat.left_edge,
+        right_edge: retreat.right_edge,
         prefer_blue: false,
-        label: 'EXECUTED KINEMATIC (not future plan)',
+        source: rk,
+        label: histLabel,
       });
+    } else if (typeof view.setGuideBand === "function") {
+      view.setGuideBand([], "#94A3B8", { slot: "history" });
     }
     view.setObstacles(snap.obstacles || []);
     view.setActors(snap.actors || []);

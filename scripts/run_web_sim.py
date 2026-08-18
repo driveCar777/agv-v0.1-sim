@@ -40,6 +40,9 @@ from agv_bridge.robokit_mock_server import (  # noqa: E402
 from agv_bridge.sim_api_ext import patch_mock_state  # noqa: E402
 from agv_bridge.sim_world import get_world  # noqa: E402
 from agv_bridge.nav_trajectory_integrity import (  # noqa: E402
+    TRAJ_KIND_BACKWARD_FUTURE,
+    TRAJ_KIND_HISTORICAL_RETREAT,
+    TRAJ_KIND_NONE,
     audit_snapshot_trajectory,
     enrich_trajectory_metadata,
     global_path_fingerprint,
@@ -309,6 +312,14 @@ class SimApp:
             path_lateral = float(getattr(self.state, "_path_lateral_m", 0.0) or 0.0)
             path_heading = float(getattr(self.state, "_path_heading_err", 0.0) or 0.0)
             physical_corridor = dict(getattr(self.state, "_physical_corridor", {}) or {})
+            retreat_corridor = dict(getattr(self.state, "_retreat_trajectory", {}) or {})
+            nav_scene_id = getattr(self.state, "_nav_scene_id", None)
+            planner_cycle_id = int(getattr(self.state, "_planner_cycle_id", 0) or 0)
+            planner_input_ts = float(getattr(self.state, "_planner_input_timestamp", 0) or 0)
+            planner_start_ts = float(getattr(self.state, "_planner_start_timestamp", 0) or 0)
+            planner_finish_ts = float(getattr(self.state, "_planner_finish_timestamp", 0) or 0)
+            scene_revision = int(getattr(self.state, "_nav_scene_revision", 0) or 0)
+            scene_warmup = int(getattr(self.state, "_scene_warmup_remaining", 0) or 0)
             global_reference = dict(getattr(self.state, "_global_reference", {}) or {})
             local_cands_layer = dict(getattr(self.state, "_local_candidates_layer", {}) or {})
             selected_local = dict(getattr(self.state, "_selected_local", {}) or {})
@@ -360,11 +371,54 @@ class SimApp:
             "confidence": float(loc.get("confidence", 0.95)),
             "model": "AMB-150",
         }
+        tnow = time.time()
         pt_enriched = (
-            enrich_trajectory_metadata(dict(physical_corridor), vehicle=agv_dict)
+            enrich_trajectory_metadata(
+                dict(physical_corridor),
+                vehicle=agv_dict,
+                now=tnow,
+                current_scene_id=nav_scene_id,
+                current_cycle_id=planner_cycle_id or None,
+            )
             if physical_corridor
             else {}
         )
+        retreat_enriched = (
+            enrich_trajectory_metadata(
+                dict(retreat_corridor),
+                vehicle=agv_dict,
+                now=tnow,
+                current_scene_id=nav_scene_id,
+                current_cycle_id=planner_cycle_id or None,
+            )
+            if retreat_corridor
+            else {}
+        )
+        # Scene mismatch / wrong family cannot be Future Local Plan.
+        # STALE forward stays visible in API with control_eligible=false (Web will not draw it as Future).
+        reject = str((pt_enriched or {}).get("integrity_reject") or "")
+        kind = str((pt_enriched or {}).get("trajectory_kind") or "")
+        scene_mismatch = reject == "TRAJECTORY_STALE_SCENE" or (
+            bool(pt_enriched)
+            and scene_warmup > 0
+            and str(pt_enriched.get("scene_id")) != str(nav_scene_id)
+        )
+        if (
+            not pt_enriched
+            or scene_mismatch
+            or reject == "TRAJECTORY_CYCLE_MISMATCH"
+            or kind in (TRAJ_KIND_HISTORICAL_RETREAT, TRAJ_KIND_BACKWARD_FUTURE, TRAJ_KIND_NONE)
+        ):
+            physical_for_nav = None
+        else:
+            physical_for_nav = pt_enriched
+        retreat_reject = str((retreat_enriched or {}).get("integrity_reject") or "")
+        if retreat_reject == "TRAJECTORY_STALE_SCENE" or (
+            scene_warmup > 0 and retreat_enriched and str(retreat_enriched.get("scene_id")) != str(nav_scene_id)
+        ):
+            retreat_for_nav = None
+        else:
+            retreat_for_nav = retreat_enriched or None
         snap = {
             "updated_at": time.time(),
             "env": {
@@ -452,8 +506,17 @@ class SimApp:
                 "planning": planning_metrics,
                 "path_lateral_error": round(path_lateral, 4),
                 "path_heading_error": round(path_heading, 4),
-                "blue_band_means": "FUTURE_LOCAL_PHYSICAL_TRAJECTORY (Probe corridor); fallback local_path is EXECUTED_KINEMATIC_BAND",
-                "physical_trajectory": pt_enriched or physical_corridor or None,
+                "blue_band_means": "FORWARD_FUTURE control-eligible only; historical/backward are retreat_trajectory",
+                "physical_trajectory": physical_for_nav,
+                "retreat_trajectory": retreat_for_nav,
+                "historical_retreat": retreat_for_nav if (retreat_for_nav or {}).get("trajectory_kind") == "HISTORICAL_RETREAT" else None,
+                "nav_scene_id": nav_scene_id,
+                "scene_id": nav_scene_id,
+                "scene_revision": scene_revision,
+                "planner_cycle_id": planner_cycle_id,
+                "planner_input_timestamp": planner_input_ts or None,
+                "planner_start_timestamp": planner_start_ts or None,
+                "planner_finish_timestamp": planner_finish_ts or None,
                 "global_reference": self._preview_summary(global_reference),
                 "local_plan": {
                     "plan_id": local_plan.get("plan_id"),

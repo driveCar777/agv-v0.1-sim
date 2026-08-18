@@ -774,6 +774,10 @@
           const bc = snap.debug?.breadcrumb || snap.debug?.phase4?.breadcrumb || {};
           body.innerHTML = kv([
             ["ACTIVE", a.source || "—"],
+            ["kind", a.trajectory_kind || snap.nav?.physical_trajectory?.trajectory_kind || "—"],
+            ["source", a.trajectory_source || a.source || "—"],
+            ["control", String(a.control_eligible ?? snap.nav?.physical_trajectory?.control_eligible ?? "—")],
+            ["viz_only", String(a.visualization_only ?? snap.nav?.physical_trajectory?.visualization_only ?? "—")],
             ["status", a.status || "—"],
             ["valid", a.valid == null ? "—" : String(!!a.valid)],
             ["length_m", a.length_m != null ? Number(a.length_m).toFixed(2) : "—"],
@@ -782,6 +786,11 @@
             ["min_clr", a.min_clearance != null ? Number(a.min_clearance).toFixed(2) : "—"],
             ["collision", a.collision == null ? "—" : String(!!a.collision)],
             ["risk", a.risk || "—"],
+            ["scene_id", a.scene_id ?? snap.nav?.scene_id ?? "—"],
+            ["cycle_id", a.planner_cycle_id ?? snap.nav?.planner_cycle_id ?? "—"],
+            ["— RETREAT / HISTORY —", ""],
+            ["kind", (snap.nav?.retreat_trajectory || {}).trajectory_kind || rec.action || "—"],
+            ["control", String((snap.nav?.retreat_trajectory || {}).control_eligible ?? "—")],
             ["— RECOVERY —", ""],
             ["class", rec.classification || "—"],
             ["action", rec.action || "—"],

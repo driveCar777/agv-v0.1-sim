@@ -200,6 +200,7 @@
       this.scene.add(this.live);
 
       this.band = null;
+      this.histBand = null;
       this.pathColor = "#3B82F6";
       this.dragging = false;
       this.lastX = 0;
@@ -379,14 +380,18 @@
     }
 
     setGuideBand(path, colorHex, opts) {
-      if (this.band) {
-        this.scene.remove(this.band);
-        this.band.geometry.dispose();
-        this.band.material.dispose();
-        this.band = null;
+      const o = opts || {};
+      const slot = o.slot === "history" ? "histBand" : "band";
+      if (this[slot]) {
+        this.scene.remove(this[slot]);
+        this[slot].geometry.dispose();
+        this[slot].material.dispose();
+        this[slot] = null;
+      }
+      if (!path || path.length < 2) {
+        if (!o.left_edge || !o.right_edge) return;
       }
       // STEP 3F: prefer PhysicalTrajectoryCorridor edges (footprint⊕margin)
-      const o = opts || {};
       const status = String(o.status || "").toUpperCase();
       const preferBlue = !!o.prefer_blue;
       let colorHexOut = colorHex || "#3B82F6";
@@ -461,9 +466,9 @@
         side: THREE.DoubleSide,
         depthWrite: false,
       });
-      this.band = new THREE.Mesh(geo, mat);
-      this.band.renderOrder = 2; // selected local above global reference
-      this.scene.add(this.band);
+      this[slot] = new THREE.Mesh(geo, mat);
+      this[slot].renderOrder = slot === "histBand" ? 1 : 2;
+      this.scene.add(this[slot]);
     }
 
     _clearLayerGroup(name) {
