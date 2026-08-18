@@ -15,6 +15,7 @@ from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 from agv_bridge.nav_execution_corridor import ExecutionCorridor, corridor_allows_omega_sign
+from agv_bridge.nav_footprint import footprint_collide
 from agv_bridge.nav_geometry import DEFAULT_GEOM, VehicleGeometry, get_vehicle_model
 from agv_bridge.nav_trajectory_validator import REASON_COLLISION, REASON_CORRIDOR, validate_trajectory
 
@@ -681,22 +682,30 @@ class DiffDriveMppi:
             body = self._rollout_body(x, y, yaw, vx_seq, w_seq)
             body_poses = self._rollout_pose_sequence(x, y, yaw, vx_seq, w_seq)
             candidate_count += 1
-            validation = validate_trajectory(
-                body_poses,
-                collide=collide,
-                clearance_at=clearance_at,
-                geom=self.geom,
-                margin_m=float(self.geom.safety_margin_m),
-                dt=self.model_dt,
-                enforce_limits=False,
-                execution_corridor=execution_corridor,
-            )
-            if not validation.valid:
-                reason = validation.reason
-                if reason == "FOOTPRINT_COLLISION":
+            # Fast inner-loop: bumper-9-point collision check only (no swept interpolation).
+            # Full swept footprint + clearance is done on the final selected trajectory only.
+            inner_hit = False
+            first_hit_pose = None
+            if collide is not None:
+                for bp in body_poses:
+                    bx = float(bp.get("x", 0) if isinstance(bp, dict) else bp[0])
+                    by = float(bp.get("y", 0) if isinstance(bp, dict) else bp[1])
+                    byaw = float(bp.get("yaw", 0) if isinstance(bp, dict) else (bp[2] if len(bp) > 2 else 0))
+                    if footprint_collide(bx, by, byaw, collide, self.geom, margin_m=float(self.geom.safety_margin_m)):
+                        inner_hit = True
+                        first_hit_pose = {"x": bx, "y": by, "yaw": byaw}
+                        break
+            # Corridor direction gate on sampled omega sequence (matches rollout generation).
+            corridor_hit = False
+            if execution_corridor is not None and execution_corridor.active and execution_corridor.constrains_side():
+                for ww in w_seq:
+                    if not corridor_allows_omega_sign(execution_corridor, float(ww)):
+                        corridor_hit = True
+                        break
+            if inner_hit or corridor_hit:
+                reason = REASON_COLLISION if inner_hit else REASON_CORRIDOR
+                if inner_hit:
                     collision_rejected_count += 1
-                elif reason == "CLEARANCE_TOO_LOW":
-                    clearance_rejected_count += 1
                 else:
                     constraint_rejected_count += 1
                 samples.append(
@@ -710,9 +719,9 @@ class DiffDriveMppi:
                         "w_seq": w_seq,
                         "path": body,
                         "meta": {
-                            "collision": validation.collision.collision,
-                            "first_collision": validation.collision.first_pose,
-                            "clearance_m": validation.minimum_clearance.minimum_clearance_m,
+                            "collision": inner_hit,
+                            "first_collision": first_hit_pose,
+                            "clearance_m": None,
                             "validator_reason": reason,
                             "cost_breakdown": {"validator_reject": 1e6, "total": 1e6},
                         },
@@ -802,7 +811,10 @@ class DiffDriveMppi:
         w_blend = 0.35 if abs(pp_w) > 0.12 else 0.12
         max_dw = 0.18 if abs(pp_w) > 0.12 else 0.12
         if mmode == "POST_TURN":
-            # Recapture must decay leftover LOCAL_* omega toward PP, not hold +0.35.
+            # Decay leftover LOCAL_* omega toward PP, not hold +0.35.
+            # Seed _cmd_w toward pp_w so blend converges quickly.
+            if abs(self._cmd_w) > abs(pp_w) + 0.05:
+                self._cmd_w = 0.6 * self._cmd_w + 0.4 * pp_w
             w_blend = 0.50
             max_dw = min(float(self.geom.acc_w) * max(n * self.model_dt, 0.05), 0.12)
         w_cmd = (1.0 - w_blend) * self._cmd_w + w_blend * w_des
