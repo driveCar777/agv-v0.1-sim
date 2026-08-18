@@ -79,6 +79,7 @@ def patch_mock_state(state) -> None:
 
     global_planner = GlobalPlannerModel()
     local_mppi = LocalMppiModel()
+    local_mppi.scene_id = 1
     progress = ProgressTracker()
     debug_hub = NavDebugHub()
     debug_hub.debug_level = "ADVANCED"
@@ -91,6 +92,15 @@ def patch_mock_state(state) -> None:
     state._last_debug_sample_t = 0.0
     state._debug_snapshot: Dict[str, Any] = {}
     state._physical_corridor: Dict[str, Any] = {}
+    state._retreat_trajectory: Dict[str, Any] = {}
+    state._nav_policy: Dict[str, Any] = {}
+    state._nav_scene_id = 1
+    state._nav_scene_revision = 1
+    state._planner_cycle_id = 0
+    state._planner_input_timestamp = 0.0
+    state._planner_start_timestamp = 0.0
+    state._planner_finish_timestamp = 0.0
+    state._scene_warmup_remaining = 0
     state._safe_vx_reason = SAFE_VX_NORMAL
     state._planner_state = "NORMAL"
     state._planner_failure_reason = ""
@@ -175,9 +185,21 @@ def patch_mock_state(state) -> None:
         state._global_path_revision = n
         return n
 
-    def _clear_progress_and_recovery() -> None:
+    def _reset_navigation_runtime(*, bump_scene: bool = False) -> None:
+        """Clear all navigation runtime so a scene/session cannot leak corridors."""
+        if bump_scene:
+            state._nav_scene_id = int(getattr(state, "_nav_scene_id", 0) or 0) + 1
+            state._nav_scene_revision = int(getattr(state, "_nav_scene_revision", 0) or 0) + 1
+            state._scene_warmup_remaining = 3
         progress.reset()
         local_mppi.reset()
+        local_mppi.scene_id = int(getattr(state, "_nav_scene_id", 1) or 1)
+        local_mppi.planner_cycle_id = 0
+        local_mppi.last_physical_trajectory = None
+        local_mppi.last_retreat_trajectory = None
+        local_mppi.last_selected_trajectory = None
+        local_mppi.last_execution_corridor = None
+        local_mppi.planner_failure_reason = ""
         state._stuck_since = 0.0
         state._stuck_s = 0.0
         state._last_progress_dist = None
@@ -185,13 +207,35 @@ def patch_mock_state(state) -> None:
         state._goal_distance = 0.0
         state._nav_phase = "forward"
         state._recovery_attempts = 0
+        state._recovery_state = "NONE"
+        state._recovery_attempt = 0
         state._stop_reason = STOP_NONE
         state._mppi_vx = state._mppi_w = 0.0
         state._cmd_vx_before_safety = state._cmd_w_before_safety = 0.0
         state._cmd_vx_after_safety = state._cmd_w_after_safety = 0.0
         state._path_lateral_m = 0.0
         state._path_heading_err = 0.0
+        state._physical_corridor = {}
+        state._retreat_trajectory = {}
+        state._nav_policy = {}
+        state._obstacle_preview = {}
+        state._local_plan = {}
+        state._local_candidates_layer = {}
+        state._selected_local = {}
+        state._debug_snapshot = {}
+        state._path_candidates = []
+        state._planned_path = []
+        state._best_confidence = 0.0
+        state._planner_failure_reason = ""
+        state._planner_state = "NORMAL"
+        state._planner_cycle_id = 0
+        state._planner_input_timestamp = 0.0
+        state._planner_start_timestamp = 0.0
+        state._planner_finish_timestamp = 0.0
         debug_hub.reset_session()
+
+    def _clear_progress_and_recovery() -> None:
+        _reset_navigation_runtime(bump_scene=False)
 
     def set_translate(payload: Dict[str, Any]) -> Dict[str, Any]:
         with state.lock:
@@ -367,9 +411,26 @@ def patch_mock_state(state) -> None:
                         tel["recovery"]["execution"] = dict(rex)
                 if getattr(local_mppi, "last_physical_trajectory", None) is not None:
                     tel["physical_trajectory"] = local_mppi.last_physical_trajectory
-                    state._physical_corridor = local_mppi.last_physical_trajectory
-                elif full:
+                    state._physical_corridor = dict(local_mppi.last_physical_trajectory)
+                else:
+                    tel["physical_trajectory"] = {}
                     state._physical_corridor = {}
+                retreat = getattr(local_mppi, "last_retreat_trajectory", None)
+                if retreat is not None:
+                    tel["retreat_trajectory"] = retreat
+                    tel["historical_retreat"] = retreat
+                    state._retreat_trajectory = dict(retreat)
+                else:
+                    tel["retreat_trajectory"] = {}
+                    tel["historical_retreat"] = {}
+                    state._retreat_trajectory = {}
+                state._planner_cycle_id = int(getattr(local_mppi, "planner_cycle_id", 0) or 0)
+                state._planner_input_timestamp = float(getattr(local_mppi, "planner_input_timestamp", 0) or 0)
+                state._planner_start_timestamp = float(getattr(local_mppi, "planner_start_timestamp", 0) or 0)
+                state._planner_finish_timestamp = float(getattr(local_mppi, "planner_finish_timestamp", 0) or 0)
+                warm = int(getattr(state, "_scene_warmup_remaining", 0) or 0)
+                if warm > 0:
+                    state._scene_warmup_remaining = warm - 1
                 if getattr(local_mppi, "breadcrumb", None) is not None:
                     tel["breadcrumb"] = local_mppi.breadcrumb.to_dict()
                 if getattr(local_mppi.policy, "last_switch_decision", None) is not None:
@@ -380,6 +441,13 @@ def patch_mock_state(state) -> None:
 
     def _run_local_planner_job(job: Dict[str, Any]) -> None:
         try:
+            job_scene = int(job.get("nav_scene_id") or 0)
+            cur_scene = int(getattr(state, "_nav_scene_id", 0) or 0)
+            if job_scene and cur_scene and job_scene != cur_scene:
+                return
+            local_mppi.scene_id = cur_scene or job_scene or int(getattr(local_mppi, "scene_id", 0) or 0)
+            local_mppi.planner_input_timestamp = float(job["now"])
+            local_mppi.planner_start_timestamp = time.time()
             res = _local_once(
                 job["x"],
                 job["y"],
@@ -403,6 +471,11 @@ def patch_mock_state(state) -> None:
                 safety_zero=job["safety_zero"],
                 planned_rejected_by_safety=job["planned_rejected_by_safety"],
             )
+            local_mppi.planner_finish_timestamp = time.time()
+            local_mppi._stamp_published_trajectories()
+            cur_scene = int(getattr(state, "_nav_scene_id", 0) or 0)
+            if job_scene and cur_scene and job_scene != cur_scene:
+                return
             _apply_local_result(res, job["now"], job["path_i"], full=job["full"])
         finally:
             with state._planner_lock:
@@ -644,27 +717,38 @@ def patch_mock_state(state) -> None:
         return resp
 
     def apply_scene(scene_id: str) -> Dict[str, Any]:
-        r = world.set_scene(scene_id)
-        if not r.get("success"):
-            return r
-        sx, sy, syaw = world.spawn_pose()
+        # STOP → reset runtime → clear trajectory → load map → set pose.
+        # Must not leave the previous scene's corridor/trajectory live while pose is rewritten.
         with state.lock:
-            state.x, state.y, state.angle = sx, sy, syaw
+            state._cmd_vx = state._cmd_vy = state._cmd_w = 0.0
+            state.vx = state.vy = state.w = 0.0
+            state.r_vx = getattr(state, "r_vx", 0.0) * 0.0
+            state.r_vy = getattr(state, "r_vy", 0.0) * 0.0
+            state.r_w = getattr(state, "r_w", 0.0) * 0.0
+            state.is_stop = True
             state._path = []
             state._planned_path = []
             state._global_path = []
             state._raw_global_path = []
-            _bump_global_revision()
             state._planning_metrics = {}
             state._path_candidates = []
             state._best_confidence = 0.0
             state._goal_xy = None
             state._nav_mode = "idle"
             state._pending_confirm = False
+            state.task_status = 0
+            _bump_global_revision()
+            _reset_navigation_runtime(bump_scene=True)
+        r = world.set_scene(scene_id)
+        if not r.get("success"):
+            return r
+        sx, sy, syaw = world.spawn_pose()
+        with state.lock:
+            state.x, state.y, state.angle = sx, sy, syaw
             state.vx = state.w = 0.0
             state._cmd_vx = state._cmd_w = 0.0
-            state.task_status = 0
-            _clear_progress_and_recovery()
+            state._nav_mode = "idle"
+            local_mppi.scene_id = int(getattr(state, "_nav_scene_id", 1) or 1)
         return r
 
     def set_control_mode(mode: str) -> Dict[str, Any]:
@@ -680,6 +764,7 @@ def patch_mock_state(state) -> None:
     state.set_control_mode = set_control_mode
     state.plan_quality_debug = plan_quality_debug
     state._reset_nav_session = _clear_progress_and_recovery
+    state.reset_navigation_runtime = lambda: _reset_navigation_runtime(bump_scene=True)
     state._global_planner = global_planner
 
     def _lookahead_point(path: List[Tuple[float, float]], x: float, y: float, lookahead_m: float = 1.4):
@@ -1826,6 +1911,7 @@ def patch_mock_state(state) -> None:
                     safety_zero=bool(getattr(state, "_last_safety_zero", False)),
                     planned_rejected_by_safety=bool(getattr(state, "_last_safety_blocked", False)),
                     path_i=path_i,
+                    nav_scene_id=int(getattr(state, "_nav_scene_id", 1) or 1),
                 )
 
                 if need_local and local_mppi.phase != "safe_stop":
