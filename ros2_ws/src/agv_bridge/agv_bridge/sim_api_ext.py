@@ -116,10 +116,19 @@ def patch_mock_state(state) -> None:
     state._nav_mode = "idle"
     state._pending_confirm = False
     state._physics_started = False
+    state._sim_runtime: Dict[str, Any] = {
+        "physics_hz": 0.0,
+        "physics_dt_ms": 0.0,
+        "physics_loop_overrun": False,
+        "physics_overrun_count": 0,
+        "last_physics_update": 0.0,
+    }
     state._last_local_replan = 0.0
     state._last_global_replan = 0.0
     state._local_replan_count = 0
     state._global_replan_count = 0
+    state._planner_inflight = False
+    state._planner_lock = threading.Lock()
     state._global_path_revision = 0
     state._global_reference: Dict[str, Any] = {}
     state._local_candidates_layer: Dict[str, Any] = {}
@@ -312,6 +321,105 @@ def patch_mock_state(state) -> None:
             safety_zero=safety_zero,
             planned_rejected_by_safety=planned_rejected_by_safety,
         )
+
+    def _apply_local_result(res, now: float, path_i: int, *, full: bool) -> None:
+        m = local_mppi.mppi
+        debug_hub.note_candidate(
+            getattr(m, "_last_selected_id", None),
+            float(getattr(m, "_last_best_cost", 0.0) or 0.0),
+            vx=float(res.vx),
+            w=float(res.w),
+        )
+        with state.lock:
+            state._mppi_vx, state._mppi_w = float(res.vx), float(res.w)
+            state._cmd_vx, state._cmd_w = float(res.vx), float(res.w)
+            state._cmd_stamp = now
+            state._debug_pp_w = float(getattr(m, "_last_pp_w", 0.0) or 0.0)
+            state._debug_selected_candidate = getattr(m, "_last_selected_id", None)
+            state._debug_best_cost = float(getattr(m, "_last_best_cost", 0.0) or 0.0)
+            state._debug_first_collision = getattr(m, "_last_first_collision", None)
+            state._debug_mppi_meta = dict(getattr(m, "_last_meta", {}) or {})
+            if full:
+                state._planned_path = list(res.best_path)
+                state._path_candidates = res.candidates
+                state._best_confidence = res.confidence
+                state._track_mode = res.mode
+                state._ctrl_note = f"{res.control_mode}:{res.mode}"
+                state._control_mode = res.control_mode
+                state._path_i = path_i
+                state._last_local_replan = now
+                state._local_replan_count = int(state._local_replan_count) + 1
+            if getattr(local_mppi, "maneuver", None):
+                state._maneuver = local_mppi.maneuver.to_telemetry()
+            if getattr(local_mppi, "policy", None):
+                tel = local_mppi.policy.to_telemetry()
+                if getattr(local_mppi, "last_probe", None) is not None:
+                    tel["probe"] = local_mppi.last_probe.to_dict(now)
+                    tel["probe_events"] = list(local_mppi.probe.events[-12:])
+                if getattr(local_mppi, "last_execution_corridor", None) is not None:
+                    tel["execution_corridor"] = local_mppi.last_execution_corridor.to_dict()
+                if getattr(local_mppi, "last_avoidance_state", None) is not None:
+                    tel["avoidance_phase"] = local_mppi.last_avoidance_state.to_dict()
+                if getattr(local_mppi, "last_recovery", None) is not None:
+                    tel["recovery"] = local_mppi.last_recovery.to_dict()
+                    rex = getattr(local_mppi.maneuver, "_recovery_exec", None)
+                    if isinstance(rex, dict):
+                        tel["recovery"]["execution"] = dict(rex)
+                if getattr(local_mppi, "last_physical_trajectory", None) is not None:
+                    tel["physical_trajectory"] = local_mppi.last_physical_trajectory
+                    state._physical_corridor = local_mppi.last_physical_trajectory
+                elif full:
+                    state._physical_corridor = {}
+                if getattr(local_mppi, "breadcrumb", None) is not None:
+                    tel["breadcrumb"] = local_mppi.breadcrumb.to_dict()
+                if getattr(local_mppi.policy, "last_switch_decision", None) is not None:
+                    tel["side_switch"] = local_mppi.policy.last_switch_decision.to_dict()
+                    tok = local_mppi.policy.switch_token
+                    tel["switch_token"] = tok.to_dict() if tok else None
+                state._nav_policy = tel
+
+    def _run_local_planner_job(job: Dict[str, Any]) -> None:
+        try:
+            res = _local_once(
+                job["x"],
+                job["y"],
+                job["yaw"],
+                job["gpath"],
+                job["goal_xy"],
+                job["stuck_s"],
+                job["front_near"],
+                job["now"],
+                job["force_rev"],
+                rear_near=job["rear_near"],
+                collision=job["collision"],
+                emergency=job["emergency"],
+                path_progress=job["path_progress"],
+                lateral_error=job["lateral_error"],
+                actual_clearance=job["actual_clearance"],
+                nav_active=True,
+                dynamic_short=job["dynamic_short"],
+                dynamic_long=job["dynamic_long"],
+                state_vx=job["state_vx"],
+                safety_zero=job["safety_zero"],
+                planned_rejected_by_safety=job["planned_rejected_by_safety"],
+            )
+            _apply_local_result(res, job["now"], job["path_i"], full=job["full"])
+        finally:
+            with state._planner_lock:
+                state._planner_inflight = False
+
+    def _dispatch_local_planner(**job: Any) -> bool:
+        with state._planner_lock:
+            if state._planner_inflight:
+                return False
+            state._planner_inflight = True
+        threading.Thread(
+            target=_run_local_planner_job,
+            args=(job,),
+            daemon=True,
+            name="sim_local_planner",
+        ).start()
+        return True
 
     def _log_decision(key: str, tip: str, level: str = "info") -> None:
         if key == state._last_log_key:
@@ -1203,11 +1311,7 @@ def patch_mock_state(state) -> None:
     def get_nav_debug() -> Dict[str, Any]:
         with state.lock:
             snap = dict(state._debug_snapshot or {})
-        if not snap:
-            _refresh_debug_snapshot(time.time())
-            with state.lock:
-                snap = dict(state._debug_snapshot or {})
-        return {"success": True, "debug": snap}
+        return {"success": True, "debug": snap, "stale": not bool(snap)}
 
     def set_debug_level(level: str) -> Dict[str, Any]:
         lv = (level or "BASIC").strip().upper()
@@ -1321,18 +1425,6 @@ def patch_mock_state(state) -> None:
             meta = dict(getattr(state, "_debug_mppi_meta", {}) or {})
             gvl = (state._debug_snapshot or {}).get("global_vs_local") if isinstance(state._debug_snapshot, dict) else {}
             dbg = state._debug_snapshot if isinstance(state._debug_snapshot, dict) else {}
-        if not gref:
-            _refresh_debug_snapshot(time.time())
-            with state.lock:
-                gref = dict(getattr(state, "_global_reference", {}) or {})
-                loc = dict(getattr(state, "_local_candidates_layer", {}) or {})
-                sel = dict(getattr(state, "_selected_local", {}) or {})
-                kv = dict(getattr(state, "_kinematic_validation", {}) or {})
-                fos = dict(getattr(state, "_open_space_forensics", {}) or {})
-                lp = dict(getattr(state, "_local_plan", {}) or {})
-                meta = dict(getattr(state, "_debug_mppi_meta", {}) or {})
-                gvl = (state._debug_snapshot or {}).get("global_vs_local") if isinstance(state._debug_snapshot, dict) else {}
-                dbg = state._debug_snapshot if isinstance(state._debug_snapshot, dict) else {}
         mppi_summary = {
             "horizon_s": meta.get("horizon_s"),
             "mean_vx": meta.get("mean_vx_after") or meta.get("mean_vx"),
@@ -1387,10 +1479,6 @@ def patch_mock_state(state) -> None:
         """GET-only P0-C.1 open-space local planning forensics. Never a control API."""
         with state.lock:
             blob = dict(getattr(state, "_open_space_forensics", {}) or {})
-        if not blob:
-            _refresh_debug_snapshot(time.time())
-            with state.lock:
-                blob = dict(getattr(state, "_open_space_forensics", {}) or {})
         return {
             "success": True,
             "open_space_forensics": blob or {},
@@ -1403,11 +1491,6 @@ def patch_mock_state(state) -> None:
         with state.lock:
             blob = dict(getattr(state, "_lookahead_forensics", {}) or {})
             dbg = state._debug_snapshot if isinstance(state._debug_snapshot, dict) else {}
-        if not blob:
-            _refresh_debug_snapshot(time.time())
-            with state.lock:
-                blob = dict(getattr(state, "_lookahead_forensics", {}) or {})
-                dbg = state._debug_snapshot if isinstance(state._debug_snapshot, dict) else {}
         lf = blob or (dbg.get("lookahead_forensics") if isinstance(dbg.get("lookahead_forensics"), dict) else {})
         return {
             "success": True,
@@ -1431,12 +1514,6 @@ def patch_mock_state(state) -> None:
             blob = dict(getattr(state, "_obstacle_preview", {}) or {})
             dbg = state._debug_snapshot if isinstance(state._debug_snapshot, dict) else {}
             lp = dict(getattr(state, "_local_plan", {}) or {})
-        if not blob:
-            _refresh_debug_snapshot(time.time())
-            with state.lock:
-                blob = dict(getattr(state, "_obstacle_preview", {}) or {})
-                dbg = state._debug_snapshot if isinstance(state._debug_snapshot, dict) else {}
-                lp = dict(getattr(state, "_local_plan", {}) or {})
         op = blob or (dbg.get("obstacle_preview") if isinstance(dbg.get("obstacle_preview"), dict) else {})
         sp = op.get("side_probe") if isinstance(op.get("side_probe"), dict) else {}
         ec = op.get("execution_corridor") if isinstance(op.get("execution_corridor"), dict) else {}
@@ -1521,14 +1598,23 @@ def patch_mock_state(state) -> None:
         while True:
             time.sleep(0.01)
             now = time.time()
-            dt = now - last_tick
-            if dt < nominal_dt:
+            wall_dt = now - last_tick
+            if wall_dt < nominal_dt:
                 continue
-            # Planner/debug overrun would otherwise apply only 0.05s of motion per
-            # 0.5–2s wall tick (LIVE traces: 60s → 0.07m). Catch up, clamped.
-            dt = min(0.20, dt)
             last_tick = now
-            world.step_actors(dt)
+            sim_dt = min(wall_dt, 1.0)
+            physics_hz = 1.0 / max(wall_dt, 1e-6)
+            physics_dt_ms = wall_dt * 1000.0
+            overrun = wall_dt > nominal_dt * 1.25
+            with state.lock:
+                rt = state._sim_runtime
+                rt["physics_hz"] = round(physics_hz, 2)
+                rt["physics_dt_ms"] = round(physics_dt_ms, 2)
+                rt["physics_loop_overrun"] = overrun
+                rt["last_physics_update"] = now
+                if overrun:
+                    rt["physics_overrun_count"] = int(rt.get("physics_overrun_count", 0) or 0) + 1
+            world.step_actors(sim_dt)
 
             with state.lock:
                 x, y, yaw = state.x, state.y, state.angle
@@ -1713,157 +1799,39 @@ def patch_mock_state(state) -> None:
                 except Exception:
                     dyn_short, dyn_long = False, False
 
-                if need_local and local_mppi.phase != "safe_stop":
-                    res = _local_once(
-                        x,
-                        y,
-                        yaw,
-                        gpath,
-                        goal_xy,
-                        stuck_s,
-                        front_near,
-                        now,
-                        force_rev,
-                        rear_near=rear_near,
-                        collision=colliding,
-                        emergency=emergency,
-                        path_progress=float(progress.path_progress_s),
-                        lateral_error=float(getattr(prog, "lateral_m", 0.0) or 0.0),
-                        actual_clearance=clr_here,
-                        nav_active=True,
-                        dynamic_short=dyn_short,
-                        dynamic_long=dyn_long,
-                        state_vx=float(getattr(state, "vx", 0.0) or 0.0),
-                        safety_zero=bool(getattr(state, "_last_safety_zero", False)),
-                        planned_rejected_by_safety=bool(getattr(state, "_last_safety_blocked", False)),
-                    )
-                    mppi_vx, mppi_w = res.vx, res.w
-                    planned_band = list(res.best_path)
-                    cmd_stamp = now
-                    m = local_mppi.mppi
-                    debug_hub.note_candidate(
-                        getattr(m, "_last_selected_id", None),
-                        float(getattr(m, "_last_best_cost", 0.0) or 0.0),
-                        vx=float(mppi_vx),
-                        w=float(mppi_w),
-                    )
-                    with state.lock:
-                        state._planned_path = planned_band
-                        state._path_candidates = res.candidates
-                        state._best_confidence = res.confidence
-                        state._track_mode = res.mode
-                        state._ctrl_note = f"{res.control_mode}:{res.mode}"
-                        state._control_mode = res.control_mode
-                        state._path_i = path_i
-                        state._last_local_replan = now
-                        state._local_replan_count = int(state._local_replan_count) + 1
-                        state._debug_pp_w = float(getattr(m, "_last_pp_w", 0.0) or 0.0)
-                        state._debug_selected_candidate = getattr(m, "_last_selected_id", None)
-                        state._debug_best_cost = float(getattr(m, "_last_best_cost", 0.0) or 0.0)
-                        state._debug_first_collision = getattr(m, "_last_first_collision", None)
-                        state._debug_mppi_meta = dict(getattr(m, "_last_meta", {}) or {})
-                        if getattr(local_mppi, "maneuver", None):
-                            state._maneuver = local_mppi.maneuver.to_telemetry()
-                        if getattr(local_mppi, "policy", None):
-                            tel = local_mppi.policy.to_telemetry()
-                            # STEP 3D evidence-only attach (does not affect control)
-                            if getattr(local_mppi, "last_probe", None) is not None:
-                                tel["probe"] = local_mppi.last_probe.to_dict(now)
-                                tel["probe_events"] = list(local_mppi.probe.events[-12:])
-                            if getattr(local_mppi, "last_execution_corridor", None) is not None:
-                                tel["execution_corridor"] = local_mppi.last_execution_corridor.to_dict()
-                            if getattr(local_mppi, "last_avoidance_state", None) is not None:
-                                tel["avoidance_phase"] = local_mppi.last_avoidance_state.to_dict()
-                            # STEP 3F — physical corridor / breadcrumb / recovery
-                            if getattr(local_mppi, "last_recovery", None) is not None:
-                                tel["recovery"] = local_mppi.last_recovery.to_dict()
-                                rex = getattr(local_mppi.maneuver, "_recovery_exec", None)
-                                if isinstance(rex, dict):
-                                    tel["recovery"]["execution"] = dict(rex)
-                            if getattr(local_mppi, "last_physical_trajectory", None) is not None:
-                                tel["physical_trajectory"] = local_mppi.last_physical_trajectory
-                                state._physical_corridor = local_mppi.last_physical_trajectory
-                            else:
-                                state._physical_corridor = {}
-                            if getattr(local_mppi, "breadcrumb", None) is not None:
-                                tel["breadcrumb"] = local_mppi.breadcrumb.to_dict()
-                            # attach side_switch from policy if present
-                            if getattr(local_mppi.policy, "last_switch_decision", None) is not None:
-                                tel["side_switch"] = local_mppi.policy.last_switch_decision.to_dict()
-                                tok = local_mppi.policy.switch_token
-                                tel["switch_token"] = tok.to_dict() if tok else None
-                            state._nav_policy = tel
-                elif now - cmd_stamp > 0.40 and local_mppi.phase != "safe_stop":
-                    res = _local_once(
-                        x,
-                        y,
-                        yaw,
-                        gpath,
-                        goal_xy,
-                        stuck_s,
-                        front_near,
-                        now,
-                        force_rev,
-                        rear_near=rear_near,
-                        collision=colliding,
-                        emergency=emergency,
-                        path_progress=float(progress.path_progress_s),
-                        lateral_error=float(getattr(prog, "lateral_m", 0.0) or 0.0),
-                        actual_clearance=clr_here,
-                        nav_active=True,
-                        dynamic_short=dyn_short,
-                        dynamic_long=dyn_long,
-                        state_vx=float(getattr(state, "vx", 0.0) or 0.0),
-                        safety_zero=bool(getattr(state, "_last_safety_zero", False)),
-                        planned_rejected_by_safety=bool(getattr(state, "_last_safety_blocked", False)),
-                    )
-                    mppi_vx, mppi_w = res.vx, res.w
-                    planned_band = list(res.best_path)
-                    cmd_stamp = now
-                    m = local_mppi.mppi
-                    debug_hub.note_candidate(
-                        getattr(m, "_last_selected_id", None),
-                        float(getattr(m, "_last_best_cost", 0.0) or 0.0),
-                        vx=float(mppi_vx),
-                        w=float(mppi_w),
-                    )
-                    with state.lock:
-                        state._debug_pp_w = float(getattr(m, "_last_pp_w", 0.0) or 0.0)
-                        state._debug_selected_candidate = getattr(m, "_last_selected_id", None)
-                        state._debug_best_cost = float(getattr(m, "_last_best_cost", 0.0) or 0.0)
-                        state._debug_first_collision = getattr(m, "_last_first_collision", None)
-                        state._debug_mppi_meta = dict(getattr(m, "_last_meta", {}) or {})
-                        if getattr(local_mppi, "maneuver", None):
-                            state._maneuver = local_mppi.maneuver.to_telemetry()
-                        if getattr(local_mppi, "policy", None):
-                            tel = local_mppi.policy.to_telemetry()
-                            if getattr(local_mppi, "last_probe", None) is not None:
-                                tel["probe"] = local_mppi.last_probe.to_dict(now)
-                                tel["probe_events"] = list(local_mppi.probe.events[-12:])
-                            if getattr(local_mppi, "last_execution_corridor", None) is not None:
-                                tel["execution_corridor"] = local_mppi.last_execution_corridor.to_dict()
-                            if getattr(local_mppi, "last_avoidance_state", None) is not None:
-                                tel["avoidance_phase"] = local_mppi.last_avoidance_state.to_dict()
-                            if getattr(local_mppi, "last_recovery", None) is not None:
-                                tel["recovery"] = local_mppi.last_recovery.to_dict()
-                                rex = getattr(local_mppi.maneuver, "_recovery_exec", None)
-                                if isinstance(rex, dict):
-                                    tel["recovery"]["execution"] = dict(rex)
-                            if getattr(local_mppi, "last_physical_trajectory", None) is not None:
-                                tel["physical_trajectory"] = local_mppi.last_physical_trajectory
-                                state._physical_corridor = local_mppi.last_physical_trajectory
-                            else:
-                                state._physical_corridor = {}
-                            if getattr(local_mppi, "breadcrumb", None) is not None:
-                                tel["breadcrumb"] = local_mppi.breadcrumb.to_dict()
-                            if getattr(local_mppi.policy, "last_switch_decision", None) is not None:
-                                tel["side_switch"] = local_mppi.policy.last_switch_decision.to_dict()
-                                tok = local_mppi.policy.switch_token
-                                tel["switch_token"] = tok.to_dict() if tok else None
-                            state._nav_policy = tel
-                else:
-                    mppi_vx, mppi_w = cmd_vx, cmd_w
+                with state.lock:
+                    mppi_vx = float(getattr(state, "_mppi_vx", cmd_vx) or cmd_vx)
+                    mppi_w = float(getattr(state, "_mppi_w", cmd_w) or cmd_w)
                     planned_band = list(getattr(state, "_planned_path", []) or [])
+
+                local_job = dict(
+                    x=x,
+                    y=y,
+                    yaw=yaw,
+                    gpath=list(gpath),
+                    goal_xy=goal_xy,
+                    stuck_s=stuck_s,
+                    front_near=front_near,
+                    now=now,
+                    force_rev=force_rev,
+                    rear_near=rear_near,
+                    collision=colliding,
+                    emergency=emergency,
+                    path_progress=float(progress.path_progress_s),
+                    lateral_error=float(getattr(prog, "lateral_m", 0.0) or 0.0),
+                    actual_clearance=clr_here,
+                    dynamic_short=dyn_short,
+                    dynamic_long=dyn_long,
+                    state_vx=float(getattr(state, "vx", 0.0) or 0.0),
+                    safety_zero=bool(getattr(state, "_last_safety_zero", False)),
+                    planned_rejected_by_safety=bool(getattr(state, "_last_safety_blocked", False)),
+                    path_i=path_i,
+                )
+
+                if need_local and local_mppi.phase != "safe_stop":
+                    _dispatch_local_planner(full=True, **local_job)
+                elif now - cmd_stamp > 0.40 and local_mppi.phase != "safe_stop":
+                    _dispatch_local_planner(full=False, **local_job)
 
                 # progress geometry for debug
                 with state.lock:
@@ -2021,13 +1989,16 @@ def patch_mock_state(state) -> None:
                     state._planned_path = planned_band
                 state._cmd_vx, state._cmd_w = safe_vx, safe_w
                 state._cmd_stamp = cmd_stamp if nav_mode in ("tracking", "avoid") else state._cmd_stamp
-                state.vx += max(-geom.acc_v * dt, min(geom.acc_v * dt, safe_vx - state.vx))
-                state.w += max(-geom.acc_w * dt, min(geom.acc_w * dt, safe_w - state.w))
-                state.r_vx, state.r_w = state.vx, state.w
-                state.is_stop = abs(state.vx) < 1e-3 and abs(state.w) < 1e-3
-                state.x += state.vx * math.cos(state.angle) * dt
-                state.y += state.vx * math.sin(state.angle) * dt
-                state.angle = (state.angle + state.w * dt + math.pi) % (2 * math.pi) - math.pi
+                int_steps = max(1, int(sim_dt / nominal_dt))
+                sub_dt = sim_dt / int_steps
+                for _ in range(int_steps):
+                    state.vx += max(-geom.acc_v * sub_dt, min(geom.acc_v * sub_dt, safe_vx - state.vx))
+                    state.w += max(-geom.acc_w * sub_dt, min(geom.acc_w * sub_dt, safe_w - state.w))
+                    state.r_vx, state.r_w = state.vx, state.w
+                    state.is_stop = abs(state.vx) < 1e-3 and abs(state.w) < 1e-3
+                    state.x += state.vx * math.cos(state.angle) * sub_dt
+                    state.y += state.vx * math.sin(state.angle) * sub_dt
+                    state.angle = (state.angle + state.w * sub_dt + math.pi) % (2 * math.pi) - math.pi
                 if state._goal_xy is not None:
                     gx, gy = state._goal_xy
                     if math.hypot(gx - state.x, gy - state.y) < 0.28:
@@ -2056,11 +2027,6 @@ def patch_mock_state(state) -> None:
                         debug_hub.end_session("GOAL_REACHED")
                         _clear_progress_and_recovery()
                         world.emit("arrived", level="success")
-
-            # Debug observability (2Hz). 20Hz kinematic snapshot starves integration.
-            if now - float(getattr(state, "_last_debug_sample_t", 0.0) or 0.0) >= 0.50:
-                state._last_debug_sample_t = now
-                _refresh_debug_snapshot(now)
 
     if not state._physics_started:
         state._physics_started = True
