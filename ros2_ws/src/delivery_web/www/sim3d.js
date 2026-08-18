@@ -583,10 +583,11 @@
         if (!poses || poses.length < 2) return;
         const selected = !!c.selected;
         const valid = c.valid !== false;
+        const highlight = layer.highlight_selected !== false;
         let col = 0x94a3b8;
         let op = 0.55;
         let y = 0.11;
-        if (selected) {
+        if (selected && highlight) {
           col = 0x2563eb;
           op = 0.95;
           y = 0.14;

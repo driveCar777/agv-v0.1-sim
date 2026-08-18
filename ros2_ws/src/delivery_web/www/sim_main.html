@@ -250,7 +250,14 @@
     border: 1px solid var(--line); border-radius: 8px; padding: 5px 7px; margin-bottom: 4px;
     background: rgba(248,250,252,0.55); font-size: 11px;
   }
-  .dbg-cand.sel { border-color: #059669; background: rgba(236,253,245,0.7); }
+  .cmd-owner {
+    position: absolute; left: 12px; bottom: 42px; z-index: 8;
+    background: rgba(15,23,42,0.78); color: #e2e8f0; font: 11px/1.45 ui-monospace, Consolas, monospace;
+    padding: 8px 10px; border-radius: 8px; min-width: 220px;
+    border: 1px solid rgba(148,163,184,0.35);
+  }
+  .cmd-owner b { color: #94a3b8; font-weight: 600; margin-right: 6px; }
+  .cmd-owner.mismatch { border-color: #f59e0b; }
 </style>
 </head>
 <body>
@@ -285,11 +292,19 @@
       <span><i style="background:#64748b"></i>Global Reference</span>
       <span><i style="background:#d97706"></i>Kinematic DEGRADED</span>
       <span><i style="background:#ef4444"></i>Kinematic INVALID</span>
-      <span><i style="background:#38bdf8"></i>Local Candidate</span>
-      <span><i style="background:#2563eb;height:4px"></i>Selected Local</span>
+      <span><i style="background:#38bdf8"></i>Local Candidate (debug, not command)</span>
+      <span><i style="background:#2563eb;height:4px"></i>Selected Local (tracking only)</span>
+      <span><i style="background:#3B82F6;height:4px"></i>Future Plan (control-eligible)</span>
       <span><i style="background:#0f172a;width:8px;height:8px;border-radius:2px"></i>Vehicle Footprint</span>
     </div>
-    <div class="hint-bar" id="camHint">跟随：对齐车头正后 · 左键左右拖改视角 · 滚轮逆时针贴近 / 顺时针俯视</div>
+    <div id="cmdOwner" class="cmd-owner" aria-live="polite">
+      <div><b>Command</b> <span id="cmdSide">—</span></div>
+      <div><b>Source</b> <span id="cmdSrc">—</span></div>
+      <div><b>Requested ω</b> <span id="cmdReqW">—</span></div>
+      <div><b>Approved ω</b> <span id="cmdAppW">—</span></div>
+      <div><b>Actual ω</b> <span id="cmdActW">—</span></div>
+      <div><b>Local plan</b> <span id="cmdLp">—</span></div>
+    </div>
   </div>
 </div>
 
@@ -390,7 +405,11 @@
     }
     const lplan = nav.local_plan || (snap.debug && snap.debug.local_plan) || null;
     if (typeof view.setLocalPlan === 'function') {
-      view.setLocalPlan(lplan);
+      if (lplan && lplan.display_as_execution && lplan.tracking_for_control && lplan.active !== false) {
+        view.setLocalPlan(lplan);
+      } else {
+        view.setLocalPlan({ poses: [], active: false });
+      }
     }
     // LAYER: Future Local Plan (control-eligible FORWARD_FUTURE only)
     const dbg0 = snap.debug || {};
@@ -450,6 +469,21 @@
       view.setLiveLidar(snap.laser?.points || []);
     }
 
+    const cmdEl = document.getElementById("cmdOwner");
+    if (cmdEl) {
+      const own = snap.debug?.command_ownership || {};
+      const src = nav.command_source || own.command_source || "OTHER";
+      const side = nav.command_side || own.command_side || "STRAIGHT";
+      const fb = nav.command_fallback || own.fallback || "NONE";
+      const lpst = nav.local_plan_status || "NONE";
+      document.getElementById("cmdSide").textContent = side;
+      document.getElementById("cmdSrc").textContent = src + (fb && fb !== "NONE" ? ` · ${fb}` : "");
+      document.getElementById("cmdReqW").textContent = Number(nav.requested_omega ?? 0).toFixed(3);
+      document.getElementById("cmdAppW").textContent = Number(nav.approved_omega ?? 0).toFixed(3);
+      document.getElementById("cmdActW").textContent = Number(nav.state_w ?? agv.w ?? 0).toFixed(3);
+      document.getElementById("cmdLp").textContent = lpst + (nav.visualization_control_mismatch ? " · VIZ≠CMD" : "");
+      cmdEl.classList.toggle("mismatch", !!nav.visualization_control_mismatch || lpst === "STALE_FALLBACK");
+    }
     setBanner(snap.banner);
     updateScenePill(scene);
     $('#hdrMeta').textContent =

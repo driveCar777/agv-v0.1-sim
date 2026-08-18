@@ -189,11 +189,11 @@
           const note = vc.note || "OK";
           const cls = note.includes("CUT") || note.includes("STOP") ? "cut" : note.includes("DELAY") ? "warn" : "ok";
           body.innerHTML = `<div class="bb-chain">
-            <div><span>MPPI</span><b>${fmt(vc.mppi_vx, 3)}</b></div>
-            <div><span>CMD</span><b>${fmt(vc.cmd_vx, 3)}</b></div>
-            <div><span>SAFETY</span><b>${fmt(vc.safe_vx, 3)}</b></div>
-            <div><span>STATE</span><b>${fmt(vc.state_vx, 3)}</b></div>
-          </div><div class="bb-note ${cls}">${note}</div>`;
+            <div><span>MPPI ω</span><b>${fmt(vc.requested_omega ?? vc.mppi_w, 3)}</b></div>
+            <div><span>SAFE ω</span><b>${fmt(vc.approved_omega, 3)}</b></div>
+            <div><span>STATE ω</span><b>${fmt(vc.state_w ?? snap.debug?.status?.w, 3)}</b></div>
+            <div><span>SRC</span><b>${vc.command_source || snap.nav?.command_source || "—"}</b></div>
+          </div><div class="bb-note ${cls}">${note} ${vc.fallback && vc.fallback !== "NONE" ? vc.fallback : ""}</div>`;
         });
       },
       dbg_lon_v: chartCard(
