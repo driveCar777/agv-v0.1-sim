@@ -800,8 +800,12 @@ class DiffDriveMppi:
         w_des = pp_w + 0.35 * self._mean_dw
         # 大航向误差时加快响应，避免 0.12 混合 + 0.03 死区把转向永久掐死
         w_blend = 0.35 if abs(pp_w) > 0.12 else 0.12
-        w_cmd = (1.0 - w_blend) * self._cmd_w + w_blend * w_des
         max_dw = 0.18 if abs(pp_w) > 0.12 else 0.12
+        if mmode == "POST_TURN":
+            # Recapture must decay leftover LOCAL_* omega toward PP, not hold +0.35.
+            w_blend = 0.50
+            max_dw = min(float(self.geom.acc_w) * max(n * self.model_dt, 0.05), 0.12)
+        w_cmd = (1.0 - w_blend) * self._cmd_w + w_blend * w_des
         w_cmd = max(self._cmd_w - max_dw, min(self._cmd_w + max_dw, w_cmd))
         w_cmd = max(-self.wz_max, min(self.wz_max, w_cmd))
         if abs(vx_cmd) < 0.06 and mmode not in ("FORWARD_TURN",):
