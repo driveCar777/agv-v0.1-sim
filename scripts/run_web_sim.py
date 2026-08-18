@@ -39,6 +39,11 @@ from agv_bridge.robokit_mock_server import (  # noqa: E402
 )
 from agv_bridge.sim_api_ext import patch_mock_state  # noqa: E402
 from agv_bridge.sim_world import get_world  # noqa: E402
+from agv_bridge.nav_trajectory_integrity import (  # noqa: E402
+    audit_snapshot_trajectory,
+    enrich_trajectory_metadata,
+    global_path_fingerprint,
+)
 
 WWW = ROOT / "ros2_ws" / "src" / "delivery_web" / "www"
 WEB_SIM_PORT = 19999
@@ -332,7 +337,35 @@ class SimApp:
         raw_pts = [{"x": p[0], "y": p[1]} for p in raw_global] if raw_global else []
         local_pts = [{"x": p[0], "y": p[1]} for p in local_raw] if local_raw else []
         planned_pts = [{"x": p[0], "y": p[1]} for p in planned_raw] if planned_raw else []
-        return {
+        agv_dict = {
+            "x": x,
+            "y": y,
+            "angle": yaw,
+            "yaw_deg": yaw * 180.0 / math.pi,
+            "battery": int(float(bat.get("battery_level", 0.87)) * 100)
+            if float(bat.get("battery_level", 0.87)) <= 1.0
+            else int(bat.get("battery_level", 87)),
+            "battery_level": float(bat.get("battery_level", 0.87)),
+            "charging": bool(bat.get("charging", False)),
+            "vx": float(spd.get("vx", 0.0)),
+            "w": float(spd.get("w", 0.0)),
+            "speed": abs(float(spd.get("vx", 0.0))),
+            "is_stop": bool(spd.get("is_stop", True)),
+            "task_status": int(task.get("task_status", 0)),
+            "target_id": task.get("target_id") or "",
+            "blocked": bool(getattr(self.state, "block_reason", 0)),
+            "emergency": False,
+            "soft_emc": False,
+            "current_station": loc.get("current_station") or "",
+            "confidence": float(loc.get("confidence", 0.95)),
+            "model": "AMB-150",
+        }
+        pt_enriched = (
+            enrich_trajectory_metadata(dict(physical_corridor), vehicle=agv_dict)
+            if physical_corridor
+            else {}
+        )
+        snap = {
             "updated_at": time.time(),
             "env": {
                 "mode": "sim_true_scene",
@@ -344,29 +377,7 @@ class SimApp:
                 "sim_engine": "smap_occupancy+dual_lidar+threejs",
             },
             "agv_link": {"status": "ONLINE"},
-            "agv": {
-                "x": x,
-                "y": y,
-                "angle": yaw,
-                "yaw_deg": yaw * 180.0 / math.pi,
-                "battery": int(float(bat.get("battery_level", 0.87)) * 100)
-                if float(bat.get("battery_level", 0.87)) <= 1.0
-                else int(bat.get("battery_level", 87)),
-                "battery_level": float(bat.get("battery_level", 0.87)),
-                "charging": bool(bat.get("charging", False)),
-                "vx": float(spd.get("vx", 0.0)),
-                "w": float(spd.get("w", 0.0)),
-                "speed": abs(float(spd.get("vx", 0.0))),
-                "is_stop": bool(spd.get("is_stop", True)),
-                "task_status": int(task.get("task_status", 0)),
-                "target_id": task.get("target_id") or "",
-                "blocked": bool(getattr(self.state, "block_reason", 0)),
-                "emergency": False,
-                "soft_emc": False,
-                "current_station": loc.get("current_station") or "",
-                "confidence": float(loc.get("confidence", 0.95)),
-                "model": "AMB-150",
-            },
+            "agv": agv_dict,
             "meta": {
                 "map_name": scene["name"],
                 "vehicle_model": "AMB-150",
@@ -441,8 +452,8 @@ class SimApp:
                 "planning": planning_metrics,
                 "path_lateral_error": round(path_lateral, 4),
                 "path_heading_error": round(path_heading, 4),
-                "blue_band_means": "SELECTED local physical trajectory (short horizon); see global_reference for 2-8m map preview; local_plan is RollingLocalPlanner 1-3m",
-                "physical_trajectory": physical_corridor or None,
+                "blue_band_means": "FUTURE_LOCAL_PHYSICAL_TRAJECTORY (Probe corridor); fallback local_path is EXECUTED_KINEMATIC_BAND",
+                "physical_trajectory": pt_enriched or physical_corridor or None,
                 "global_reference": self._preview_summary(global_reference),
                 "local_plan": {
                     "plan_id": local_plan.get("plan_id"),
@@ -474,6 +485,7 @@ class SimApp:
                 "kinematic_validation": self._kinematic_summary(kinematic_validation),
                 "open_space_forensics": self._open_space_summary(open_space_forensics),
                 "global_path_revision": path_rev,
+                "global_path_hash": global_path_fingerprint(global_pts),
                 "safety_envelope": {
                     "front_near": round(front_near, 3),
                     "rear_near": round(rear_near, 3),
@@ -511,6 +523,8 @@ class SimApp:
             "route_task": {},
             "obstacle_preview": obstacle_preview,
         }
+        snap["trajectory_integrity"] = audit_snapshot_trajectory(snap)
+        return snap
 
     def _stations(self) -> list:
         return self.world.pois()
@@ -1140,6 +1154,45 @@ def make_handler(www: Path):
 
                 client = NavLiveClient(host=APP.host)
                 self._json(200, apply_scenario(client, APP.world, str(body.get("scene") or body.get("id") or "")))
+                return
+            if path in ("/api/scenario/inject/ahead", "/api/scenario/inject-ahead"):
+                from agv_bridge.nav_scenario_injector import M32_OPEN_GOAL, M32_OPEN_START, _inject_ahead_of_pose
+
+                class _InjectClient:
+                    def post(self, p: str, b: Optional[dict] = None) -> dict:
+                        b = b or {}
+                        if p == "/api/obstacles/add":
+                            return APP.world.add_dyn_obstacle(b["x"], b["y"], b["r"], b["name"], b.get("kind", "box"))
+                        if p == "/api/scenario/mover/add":
+                            return APP.world.add_scenario_mover(
+                                b["name"], b["x"], b["y"], b["r"], b["vx"], b["vy"], b.get("kind", "dynamic")
+                            )
+                        return {"success": False}
+
+                with APP.state.lock:
+                    px, py = float(APP.state.x), float(APP.state.y)
+                    rev = int(getattr(APP.state, "_global_path_revision", 0) or 0)
+                    gpath = list(getattr(APP.state, "_global_path", []) or [])
+                ahead_m = float(body.get("ahead_m") or body.get("forward_m") or 2.5)
+                kind = str(body.get("kind") or "static_left")
+                prefix = str(body.get("prefix") or body.get("name") or "online_api")
+                start = body.get("start") or M32_OPEN_START
+                goal = body.get("goal") or M32_OPEN_GOAL
+                ghash = global_path_fingerprint([{"x": p[0], "y": p[1]} for p in gpath] if gpath else [])
+                _inject_ahead_of_pose(_InjectClient(), APP.world, start, goal, (px, py), ahead_m, kind, prefix)
+                self._json(
+                    200,
+                    {
+                        "success": True,
+                        "event": "ONLINE_OBSTACLE_INJECT",
+                        "ahead_m": ahead_m,
+                        "kind": kind,
+                        "prefix": prefix,
+                        "vehicle_pose": {"x": px, "y": py},
+                        "global_path_revision_before": rev,
+                        "global_path_hash_before": ghash,
+                    },
+                )
                 return
             if path == "/api/mock/control":
                 self._json(200, APP.tcp.call(PORT_CONFIG, API_MOCK_CTRL, body))

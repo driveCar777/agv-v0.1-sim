@@ -74,6 +74,9 @@ class ScenarioSpec:
     post_setup: Optional[Callable[[LiveClient, SimWorld, Pt, float], None]] = None
     inject_delay_s: float = 0.0
     inject_fn: Optional[Callable[[LiveClient, SimWorld, Pt, float], None]] = None
+    inject_min_progress_m: float = 0.0
+    inject_min_vx: float = 0.0
+    test_class: str = "BASELINE"
     expect_navigation_failed: bool = False
 
 
@@ -386,6 +389,48 @@ SCENARIOS: Dict[str, ScenarioSpec] = {
         map_scene="m32_open_straight",
         inject_delay_s=1.5,
         inject_fn=_route_inject_ahead(M32_OPEN_START, M32_OPEN_GOAL, 3.5, "field", "obs_open_p0d1"),
+        test_class="GLOBAL_PLANNING_AT_START",
+    ),
+    # M3.8 — ONLINE injection: vehicle must move before obstacle appears (local avoidance test).
+    "ONLINE-LEFT": ScenarioSpec(
+        scene_id="ONLINE-LEFT",
+        label="ONLINE-STATIC-LEFT",
+        description="M3.8 baseline cruise then inject LEFT-feasible obstacle on unchanged global path",
+        start=dict(M32_OPEN_START),
+        goal=dict(M32_OPEN_GOAL),
+        map_scene="m32_open_straight",
+        inject_delay_s=9999.0,
+        inject_min_progress_m=1.2,
+        inject_min_vx=0.05,
+        inject_fn=_route_inject_ahead(M32_OPEN_START, M32_OPEN_GOAL, 2.5, "static_left", "online_l"),
+        test_class="LOCAL_AVOIDANCE_ONLINE",
+    ),
+    "ONLINE-RIGHT": ScenarioSpec(
+        scene_id="ONLINE-RIGHT",
+        label="ONLINE-STATIC-RIGHT",
+        description="M3.8 baseline cruise then inject RIGHT-feasible obstacle on unchanged global path",
+        start=dict(M32_OPEN_START),
+        goal=dict(M32_OPEN_GOAL),
+        map_scene="m32_open_straight",
+        inject_delay_s=9999.0,
+        inject_min_progress_m=1.2,
+        inject_min_vx=0.05,
+        inject_fn=_route_inject_ahead(M32_OPEN_START, M32_OPEN_GOAL, 2.5, "static_right", "online_r"),
+        test_class="LOCAL_AVOIDANCE_ONLINE",
+    ),
+    "ONLINE-BOTH-BLOCKED": ScenarioSpec(
+        scene_id="ONLINE-BOTH-BLOCKED",
+        label="ONLINE-BOTH-BLOCKED",
+        description="M3.8 baseline cruise then inject both-blocked obstacle — expect safe stop",
+        start=dict(M32_OPEN_START),
+        goal=dict(M32_OPEN_GOAL),
+        map_scene="m32_open_straight",
+        inject_delay_s=9999.0,
+        inject_min_progress_m=1.2,
+        inject_min_vx=0.05,
+        inject_fn=_route_inject_ahead(M32_OPEN_START, M32_OPEN_GOAL, 2.3, "both", "online_bb"),
+        test_class="LOCAL_AVOIDANCE_ONLINE",
+        expect_navigation_failed=True,
     ),
 }
 
@@ -399,7 +444,8 @@ OBS_OPEN_SCENES = [
     "OBS-OPEN-DYNAMIC-AWAY",
     "OBS-OPEN-FIELD-P0D1",
 ]
-M33_SCENES = M32_SCENES + OBS_OPEN_SCENES
+ONLINE_SCENES = ["ONLINE-LEFT", "ONLINE-RIGHT", "ONLINE-BOTH-BLOCKED"]
+M33_SCENES = M32_SCENES + OBS_OPEN_SCENES + ONLINE_SCENES
 
 
 def reset_scenario(client: LiveClient, world: SimWorld) -> dict:
@@ -481,5 +527,8 @@ def apply_scenario(client: LiveClient, world: SimWorld, scene_id: str) -> dict:
         "goal": {"x": gx, "y": gy, "poi": spec.goal.get("poi")},
         "waypoints": plan.get("waypoints"),
         "inject_delay_s": spec.inject_delay_s,
+        "inject_min_progress_m": spec.inject_min_progress_m,
+        "inject_min_vx": spec.inject_min_vx,
+        "test_class": spec.test_class,
         "expect_navigation_failed": spec.expect_navigation_failed,
     }

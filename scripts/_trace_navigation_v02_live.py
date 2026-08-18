@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 import sys
 import time
@@ -23,7 +24,8 @@ if BRIDGE not in sys.path:
     sys.path.insert(0, BRIDGE)
 
 from agv_bridge.nav_live_client import NavLiveClient  # noqa: E402
-from agv_bridge.nav_scenario_injector import ALL_SCENES, M32_SCENES, M33_SCENES, OBS_OPEN_SCENES, SCENARIOS, apply_scenario  # noqa: E402
+from agv_bridge.nav_scenario_injector import ALL_SCENES, M32_SCENES, M33_SCENES, OBS_OPEN_SCENES, ONLINE_SCENES, SCENARIOS, apply_scenario  # noqa: E402
+from agv_bridge.nav_trajectory_integrity import enrich_trajectory_metadata, global_path_fingerprint  # noqa: E402
 from agv_bridge.sim_world import SimWorld  # noqa: E402
 
 _TRACK_KEYS = (
@@ -55,6 +57,9 @@ _SCENE_FILE_TAG = {
     "OBS-OPEN-DYNAMIC-CROSS": "OBS-OPEN-DYNAMIC-cross",
     "OBS-OPEN-DYNAMIC-AWAY": "OBS-OPEN-DYNAMIC-away",
     "OBS-OPEN-FIELD-P0D1": "OBS-OPEN-FIELD-p0d1",
+    "ONLINE-LEFT": "ONLINE-LEFT-static-left",
+    "ONLINE-RIGHT": "ONLINE-RIGHT-static-right",
+    "ONLINE-BOTH-BLOCKED": "ONLINE-BOTH-blocked",
 }
 
 
@@ -95,6 +100,14 @@ def _sample_v02(client: NavLiveClient, seq: int, scene: str, setup_meta: dict) -
 
     goal = nav.get("goal") or setup_meta.get("goal")
     gpath = nav.get("path") or []
+    pt_raw = nav.get("physical_trajectory") or dbg.get("physical_trajectory") or {}
+    pt = enrich_trajectory_metadata(dict(pt_raw), vehicle=agv) if pt_raw else {}
+    integ = pt.get("integrity") or {}
+    lplan = nav.get("local_plan") or dbg.get("local_plan") or {}
+    ghash = global_path_fingerprint(gpath)
+    safety_collision = safety.get("collision")
+    if safety_collision is None:
+        safety_collision = dbg.get("collision")
 
     row = {
         "ts": time.time(),
@@ -172,6 +185,33 @@ def _sample_v02(client: NavLiveClient, seq: int, scene: str, setup_meta: dict) -
         "physics_dt_ms": sim_rt.get("physics_dt_ms"),
         "physics_overrun_count": sim_rt.get("physics_overrun_count"),
         "sim_runtime": sim_rt,
+        "scene_phase": setup_meta.get("scene_phase") or "BASELINE",
+        "test_class": setup_meta.get("test_class"),
+        "global_path_revision": nav.get("global_path_revision"),
+        "global_replan_count": nav.get("global_replan_count"),
+        "global_path_hash": ghash,
+        "global_path_hash_at_setup": setup_meta.get("global_path_hash_at_setup"),
+        "global_replan_occurred": (
+            nav.get("global_path_revision") is not None
+            and setup_meta.get("global_path_revision_at_setup") is not None
+            and int(nav.get("global_path_revision") or 0) > int(setup_meta.get("global_path_revision_at_setup") or 0)
+        ),
+        "collision": safety_collision,
+        "physical_trajectory": pt if pt else None,
+        "trajectory_source": pt.get("source") if pt else None,
+        "trajectory_frame": pt.get("frame_id") if pt else None,
+        "trajectory_kind": pt.get("trajectory_kind") if pt else None,
+        "trajectory_timestamp": pt.get("trajectory_timestamp") if pt else None,
+        "anchor_error_m": integ.get("anchor_error_m"),
+        "anchor_yaw_error_deg": integ.get("anchor_yaw_error_deg"),
+        "trajectory_age_ms": integ.get("trajectory_age_ms"),
+        "max_anchor_error_m": integ.get("max_anchor_error_m"),
+        "trajectory_behind_vehicle": integ.get("behind_vehicle"),
+        "trajectory_stale": integ.get("stale"),
+        "trajectory_reanchored": pt.get("stale_reanchor_applied") or integ.get("stale_reanchor_applied"),
+        "reanchor_shift_m": pt.get("reanchor_shift_m") or integ.get("reanchor_shift_m"),
+        "local_plan_timestamp": lplan.get("generated_at") if isinstance(lplan, dict) else None,
+        "local_plan_active": lplan.get("active") if isinstance(lplan, dict) else None,
     }
     return row
 
@@ -228,6 +268,31 @@ def _sync_world_scene(world: SimWorld, map_scene: str) -> None:
         world.load_indoor()
 
 
+def _baseline_pose(client: NavLiveClient, start: dict) -> Tuple[float, float, float]:
+    st = client.get("/api/state?lite=1")
+    agv = st.get("agv") or {}
+    sx = float(start.get("x") or 0)
+    sy = float(start.get("y") or 0)
+    x = float(agv.get("x") or sx)
+    y = float(agv.get("y") or sy)
+    return x, y, math.hypot(x - sx, y - sy)
+
+
+def _scene_phase(injected: bool, row: dict, spec_test_class: str) -> str:
+    if not injected:
+        return "BASELINE"
+    phase = str(row.get("avoidance_phase") or "").upper()
+    if "PASS" in phase or row.get("nav_state") == "arrived":
+        return "OBSTACLE_PASSED"
+    if row.get("recovery_state") not in (None, "", "NONE") or row.get("planner_state") not in (None, "", "NORMAL"):
+        if spec_test_class == "LOCAL_AVOIDANCE_ONLINE" and row.get("global_replan_occurred"):
+            return "GLOBAL_REPLAN"
+        return "LOCAL_AVOIDANCE"
+    if phase in ("SIDE_PROBE", "SIDE_DECISION", "SIDE_COMMIT", "EXECUTION_CORRIDOR", "OBSTACLE_APPROACH"):
+        return "LOCAL_AVOIDANCE"
+    return "OBSTACLE_INJECTED"
+
+
 def run_scene(
     client: NavLiveClient,
     world: SimWorld,
@@ -247,6 +312,16 @@ def run_scene(
             "",
         )
 
+    st0 = client.get("/api/state?lite=1")
+    nav0 = st0.get("nav") or {}
+    setup["global_path_hash_at_setup"] = global_path_fingerprint(nav0.get("path") or [])
+    setup["global_path_revision_at_setup"] = nav0.get("global_path_revision")
+    setup["scene_phase"] = "BASELINE"
+    setup["test_class"] = spec.test_class
+    sx0, sy0 = float(spec.start["x"]), float(spec.start["y"])
+    baseline_x0 = float((st0.get("agv") or {}).get("x") or sx0)
+    baseline_y0 = float((st0.get("agv") or {}).get("y") or sy0)
+
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     tag = _SCENE_FILE_TAG.get(scene_id, scene_id)
     rows: List[dict] = []
@@ -254,45 +329,85 @@ def run_scene(
     prev_row: Optional[dict] = None
     t0 = time.time()
     injected = False
+    critical_stop: Optional[str] = None
     period = 1.0 / max(0.2, hz)
     deadline = t0 + max(1.0, seconds)
+    inject_rev_before: Optional[int] = None
+    inject_hash_before: Optional[str] = None
 
-    while time.time() < deadline:
+    while time.time() < deadline and critical_stop is None:
         tick_start = time.time()
         elapsed = tick_start - t0
-        if (not injected) and spec.inject_fn and elapsed >= spec.inject_delay_s:
-            pose = client.get("/api/state?lite=1").get("agv") or {}
-            px, py = float(pose.get("x") or 0), float(pose.get("y") or 0)
-            yaw = float(pose.get("angle") or 0)
+        st_pre = client.get("/api/state?lite=1")
+        agv_pre = st_pre.get("agv") or {}
+        nav_pre = st_pre.get("nav") or {}
+        progress_m = math.hypot(float(agv_pre.get("x") or baseline_x0) - baseline_x0, float(agv_pre.get("y") or baseline_y0) - baseline_y0)
+        vx_pre = float(agv_pre.get("vx") or 0)
+
+        should_inject = False
+        if (not injected) and spec.inject_fn:
+            if spec.test_class == "LOCAL_AVOIDANCE_ONLINE":
+                should_inject = progress_m >= float(spec.inject_min_progress_m or 0) and vx_pre >= float(spec.inject_min_vx or 0)
+            elif elapsed >= spec.inject_delay_s:
+                should_inject = True
+
+        if should_inject:
+            px, py = float(agv_pre.get("x") or 0), float(agv_pre.get("y") or 0)
+            yaw = float(agv_pre.get("angle") or 0)
+            inject_rev_before = int(nav_pre.get("global_path_revision") or 0)
+            inject_hash_before = global_path_fingerprint(nav_pre.get("path") or [])
             _sync_world_scene(world, spec.map_scene)
             spec.inject_fn(client, world, (px, py), yaw)
             injected = True
+            setup["scene_phase"] = "OBSTACLE_INJECTED"
             rows.append(
                 {
                     "ts": time.time(),
                     "seq": seq,
                     "scene": scene_id,
-                    "event": "OBSTACLE_INJECT",
+                    "event": "ONLINE_OBSTACLE_INJECT",
                     "elapsed_s": round(elapsed, 3),
-                    "schema": "navigation_v0.2_trace/2",
+                    "vehicle_progress_m": round(progress_m, 4),
+                    "vehicle_vx": vx_pre,
+                    "global_path_revision_before": inject_rev_before,
+                    "global_path_hash_before": inject_hash_before,
+                    "schema": "navigation_v0.2_trace/3",
                 }
             )
             seq += 1
 
         try:
             sample = _sample_v02(client, seq, scene_id, setup)
+            sample["scene_phase"] = _scene_phase(injected, sample, spec.test_class)
+            setup["scene_phase"] = sample["scene_phase"]
+            if injected and spec.test_class == "LOCAL_AVOIDANCE_ONLINE":
+                if sample.get("global_replan_occurred") and inject_rev_before is not None:
+                    sample["global_replan_after_inject"] = True
+                if inject_hash_before and sample.get("global_path_hash") != inject_hash_before:
+                    sample["global_path_hash_changed"] = True
             transitions = _detect_transitions(prev_row, sample)
             if transitions:
                 sample["transitions"] = transitions
             rows.append(sample)
             prev_row = sample
             seq += 1
+            if sample.get("collision"):
+                critical_stop = "P0_COLLISION"
+                rows.append({"ts": time.time(), "seq": seq, "scene": scene_id, "event": critical_stop, "schema": "navigation_v0.2_trace/3"})
+                seq += 1
+            elif sample.get("trajectory_behind_vehicle") and not sample.get("physical_trajectory", {}).get("integrity", {}).get("stale_reanchor_applied") and not (isinstance(sample.get("physical_trajectory"), dict) and sample["physical_trajectory"].get("stale_reanchor_applied")):
+                critical_stop = "P0_TRAJECTORY_INTEGRITY_FAILURE"
+                rows.append({"ts": time.time(), "seq": seq, "scene": scene_id, "event": critical_stop, "schema": "navigation_v0.2_trace/3"})
+                seq += 1
         except (urllib.error.URLError, TimeoutError, json.JSONDecodeError, OSError) as exc:
-            rows.append({"ts": time.time(), "seq": seq, "scene": scene_id, "error": str(exc), "schema": "navigation_v0.2_trace/2"})
+            rows.append({"ts": time.time(), "seq": seq, "scene": scene_id, "error": str(exc), "schema": "navigation_v0.2_trace/3"})
             seq += 1
         remain = period - (time.time() - tick_start)
         if remain > 0:
             time.sleep(remain)
+
+    if critical_stop:
+        print(f"  CRITICAL: {critical_stop} — trace stopped early")
 
     return rows, seq, setup, f"{tag}-{stamp}.jsonl"
 
@@ -300,7 +415,7 @@ def run_scene(
 def main() -> int:
     ap = argparse.ArgumentParser(description="V0.2 navigation LIVE trace (M3.1 deterministic scenarios)")
     ap.add_argument("--base", default=os.environ.get("AGV_SIM_BASE", "http://127.0.0.1:19999"))
-    ap.add_argument("--scene", choices=ALL_SCENES + M33_SCENES + ["ALL", "OBS-OPEN-ALL"], default="LIVE-00")
+    ap.add_argument("--scene", choices=ALL_SCENES + M33_SCENES + ["ALL", "OBS-OPEN-ALL", "ONLINE-ALL"], default="LIVE-00")
     ap.add_argument("--seconds", type=float, default=20.0)
     ap.add_argument("--hz", type=float, default=5.0)
     ap.add_argument("--out-dir", default=os.path.join(ROOT, "logs", "navigation_v02"))
@@ -320,6 +435,8 @@ def main() -> int:
         scenes = ALL_SCENES + M33_SCENES
     elif args.scene == "OBS-OPEN-ALL":
         scenes = OBS_OPEN_SCENES
+    elif args.scene == "ONLINE-ALL":
+        scenes = ONLINE_SCENES
     else:
         scenes = [args.scene]
 
