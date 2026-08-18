@@ -328,6 +328,7 @@ class SimApp:
             local_plan = dict(getattr(self.state, "_local_plan", {}) or {})
             path_rev = int(getattr(self.state, "_global_path_revision", 0) or 0)
             obstacle_preview = dict(getattr(self.state, "_obstacle_preview", {}) or {})
+            command_own = dict(getattr(self.state, "_command_ownership", {}) or {})
         navigating = nav_mode in ("tracking", "avoid", "planned", "planner_debug")
         if lite:
             surround = list(getattr(self.state, "_cached_surround_cloud", []) or live)
@@ -419,6 +420,32 @@ class SimApp:
             retreat_for_nav = None
         else:
             retreat_for_nav = retreat_enriched or None
+        tracking_local = bool(command_own.get("tracking_local_plan"))
+        follow_src = str(command_own.get("follow_path_source") or "")
+        local_plan_status = str((local_plan or {}).get("status") or "NONE")
+        phys_ineligible = bool(physical_for_nav) and physical_for_nav.get("control_eligible") is False
+        if not local_plan:
+            local_plan_status = "NONE"
+        elif tracking_local and phys_ineligible:
+            local_plan_status = "TRACKING_STALE_POSES"
+        elif not tracking_local:
+            local_plan_status = "STALE_FALLBACK" if phys_ineligible else "NOT_TRACKING"
+        viz_mismatch = bool(
+            (local_plan and local_plan.get("poses") and (not tracking_local or phys_ineligible))
+            or (local_cands_layer and (local_cands_layer.get("items") or []) and not tracking_local)
+        )
+        cmd_side = str(command_own.get("command_side") or "STRAIGHT")
+        try:
+            from agv_bridge.nav_command_ownership import command_actual_consistency, path_heading_rad
+
+            global_path_heading = path_heading_rad(global_pts, float(x), float(y))
+            cmd_act = command_actual_consistency(
+                approved_omega=float(cmd_w_as),
+                actual_omega=float(spd.get("w", 0.0) or 0.0),
+            )
+        except Exception:
+            global_path_heading = None
+            cmd_act = {}
         snap = {
             "updated_at": time.time(),
             "env": {
@@ -517,6 +544,23 @@ class SimApp:
                 "planner_input_timestamp": planner_input_ts or None,
                 "planner_start_timestamp": planner_start_ts or None,
                 "planner_finish_timestamp": planner_finish_ts or None,
+                "command_source": command_own.get("command_source") or "OTHER",
+                "command_source_module": command_own.get("command_source_module"),
+                "command_source_reason": command_own.get("command_source_reason") or command_own.get("command_reason"),
+                "command_reason": command_own.get("command_reason"),
+                "last_command_writer": command_own.get("last_command_writer"),
+                "command_write_trace": command_own.get("command_write_trace") or [],
+                "command_side": cmd_side,
+                "command_fallback": command_own.get("fallback") or "NONE",
+                "safety_direction_override": bool(command_own.get("safety_direction_override")),
+                "follow_path_source": follow_src or None,
+                "visualization_control_mismatch": viz_mismatch,
+                "local_plan_status": local_plan_status,
+                "pp_w": command_own.get("pp_w"),
+                "global_path_heading": None if global_path_heading is None else round(float(global_path_heading), 4),
+                "command_actual_sign": cmd_act.get("command_actual_sign"),
+                "actuator_direction_mismatch": bool(cmd_act.get("actuator_direction_mismatch")),
+                "command_actual_magnitude_error": cmd_act.get("command_actual_magnitude_error"),
                 "global_reference": self._preview_summary(global_reference),
                 "local_plan": {
                     "plan_id": local_plan.get("plan_id"),
@@ -530,16 +574,20 @@ class SimApp:
                     "kinematic_valid": local_plan.get("kinematic_valid"),
                     "min_clearance": local_plan.get("min_clearance"),
                     "source": "ROLLING_LOCAL_PLANNER",
+                    "tracking_for_control": tracking_local,
+                    "display_as_execution": tracking_local,
                     "poses": (local_plan.get("poses") or [])[:64],
                 }
                 if local_plan
-                else {"active": False, "source": "ROLLING_LOCAL_PLANNER"},
+                else {"active": False, "source": "ROLLING_LOCAL_PLANNER", "tracking_for_control": False, "display_as_execution": False},
                 "local_candidates": {
                     "count": local_cands_layer.get("count"),
                     "valid_count": local_cands_layer.get("valid_count"),
                     "max_distance_m": local_cands_layer.get("max_distance_m"),
                     "mean_distance_m": local_cands_layer.get("mean_distance_m"),
-                    "source": local_cands_layer.get("source"),
+                    "source": local_cands_layer.get("source") or "DEBUG_CANDIDATES",
+                    "role": "DEBUG_NOT_COMMAND",
+                    "highlight_selected": bool(tracking_local and not phys_ineligible),
                     "items": (local_cands_layer.get("items") or [])[:12],
                 }
                 if local_cands_layer

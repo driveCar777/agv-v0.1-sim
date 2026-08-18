@@ -23,7 +23,7 @@ class NavLiveClient:
         data = json.dumps(body or {}).encode("utf-8")
         req = urllib.request.Request(url, data=data, method="POST")
         req.add_header("Content-Type", "application/json")
-        with urllib.request.urlopen(req, timeout=20.0) as resp:
+        with urllib.request.urlopen(req, timeout=60.0) as resp:
             return json.loads(resp.read().decode("utf-8"))
 
     def mock_control(self, payload: dict) -> dict:

@@ -235,10 +235,46 @@ def _sample_v02(client: NavLiveClient, seq: int, scene: str, setup_meta: dict) -
         "trajectory_reanchored": pt.get("stale_reanchor_applied") or integ.get("stale_reanchor_applied"),
         "reanchor_shift_m": pt.get("reanchor_shift_m") or integ.get("reanchor_shift_m"),
         "small_reanchor_applied": pt.get("small_reanchor_applied") or integ.get("small_reanchor_applied"),
-        "local_plan_timestamp": lplan.get("generated_at") if isinstance(lplan, dict) else None,
-        "local_plan_active": lplan.get("active") if isinstance(lplan, dict) else None,
+        "mppi_vx": nav.get("mppi_vx"),
+        "mppi_omega": nav.get("mppi_w") or nav.get("requested_omega"),
+        "requested_vx": nav.get("requested_vx") or nav.get("cmd_vx_before_safety"),
+        "requested_omega": nav.get("requested_omega") or nav.get("cmd_w_before_safety"),
+        "approved_vx": nav.get("approved_vx") or nav.get("cmd_vx_after_safety"),
+        "approved_omega": nav.get("approved_omega") or nav.get("cmd_w_after_safety"),
+        "actual_vx": agv.get("vx") or nav.get("state_vx"),
+        "actual_omega": agv.get("w") or nav.get("state_w"),
+        "actual_yaw": agv.get("angle"),
+        "command_source": nav.get("command_source") or ((st.get("debug") or {}).get("command_ownership") or {}).get("command_source"),
+        "command_reason": nav.get("command_reason") or nav.get("command_source_reason"),
+        "command_source_module": nav.get("command_source_module"),
+        "command_write_trace": nav.get("command_write_trace"),
+        "command_fallback": nav.get("command_fallback"),
+        "command_side": nav.get("command_side"),
+        "follow_path_source": nav.get("follow_path_source"),
+        "local_plan_status": nav.get("local_plan_status"),
+        "visualization_control_mismatch": nav.get("visualization_control_mismatch"),
+        "pp_w": nav.get("pp_w"),
+        "safety_direction_override": nav.get("safety_direction_override"),
+        "global_path_heading": nav.get("global_path_heading"),
+        "command_actual_sign": nav.get("command_actual_sign"),
+        "actuator_direction_mismatch": nav.get("actuator_direction_mismatch"),
     }
+    row["trajectory_side"] = _traj_side(row.get("direction_angle") or (pt.get("direction_angle") if pt else None))
     return row
+
+
+def _traj_side(ang: Any) -> Optional[str]:
+    if ang is None:
+        return None
+    try:
+        a = float(ang)
+    except (TypeError, ValueError):
+        return None
+    if a > 15.0:
+        return "LEFT"
+    if a < -15.0:
+        return "RIGHT"
+    return "STRAIGHT"
 
 
 def _omega_sign(w: Any) -> Optional[str]:

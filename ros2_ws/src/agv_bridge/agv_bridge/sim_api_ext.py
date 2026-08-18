@@ -93,6 +93,7 @@ def patch_mock_state(state) -> None:
     state._debug_snapshot: Dict[str, Any] = {}
     state._physical_corridor: Dict[str, Any] = {}
     state._retreat_trajectory: Dict[str, Any] = {}
+    state._command_ownership: Dict[str, Any] = {}
     state._nav_policy: Dict[str, Any] = {}
     state._nav_scene_id = 1
     state._nav_scene_revision = 1
@@ -840,6 +841,7 @@ def patch_mock_state(state) -> None:
             maneuver = dict(getattr(state, "_maneuver", {}) or {})
             nav_policy = dict(getattr(state, "_nav_policy", {}) or {})
             cmd_source = str(getattr(state, "_cmd_source", "") or "")
+            command_ownership = dict(getattr(state, "_command_ownership", {}) or {})
             scene = world.scene_info()
 
         la = _lookahead_point(gpath, x, y)
@@ -1018,6 +1020,18 @@ def patch_mock_state(state) -> None:
             cmd_source=cmd_source,
             nav_policy=nav_policy,
         )
+        own = dict(command_ownership)
+        if own:
+            dbg["command_ownership"] = own
+            vc = dbg.get("velocity_chain")
+            if isinstance(vc, dict):
+                vc["command_source"] = own.get("command_source")
+                vc["command_source_module"] = own.get("command_source_module")
+                vc["command_source_reason"] = own.get("command_source_reason")
+                vc["command_write_trace"] = own.get("command_write_trace")
+                vc["last_command_writer"] = own.get("last_command_writer")
+                vc["safety_direction_override"] = own.get("safety_direction_override")
+                vc["fallback"] = own.get("fallback")
         if dbg.get("wall_approach") is not None:
             dbg["wall_approach"]["nearest_obstacle_point"] = obs_info.get("nearest_obstacle_point")
         # P0-B: Global Reference Preview — AFTER control, read-only (never cmd_vel)
@@ -1982,6 +1996,46 @@ def patch_mock_state(state) -> None:
             if planner_state == NAVIGATION_FAILED:
                 safe_vx = safe_w = 0.0
                 stop_reason = STOP_NAV_FAILED
+
+            try:
+                from agv_bridge.nav_command_ownership import classify_command_source
+
+                meta_now = dict(getattr(local_mppi.mppi, "_last_meta", {}) or {})
+                mm_now = str(meta_now.get("maneuver_mode") or "")
+                if not mm_now:
+                    try:
+                        mm_now = str(getattr(local_mppi.maneuver, "mode", "") or "")
+                    except Exception:
+                        mm_now = str(getattr(state, "_maneuver", {}) or {}).get("mode") or ""
+                lp_obj = getattr(local_mppi, "last_local_plan", None)
+                pt_now = getattr(local_mppi, "last_physical_trajectory", None)
+                pt_eligible = None
+                if isinstance(pt_now, dict):
+                    pt_eligible = pt_now.get("control_eligible")
+                own = classify_command_source(
+                    nav_mode=nav_mode,
+                    emergency=emergency,
+                    maneuver_mode=mm_now,
+                    planner_state=planner_state,
+                    follow_path_source=str(meta_now.get("follow_path_source") or ""),
+                    tracking_local_plan=bool(meta_now.get("tracking_local_plan")),
+                    requested_vx=float(mppi_vx),
+                    requested_omega=float(mppi_w),
+                    approved_vx=float(safe_vx),
+                    approved_omega=float(safe_w),
+                    safe_vx_reason=str(safe_vx_reason),
+                    stop_reason=str(stop_reason),
+                    local_plan_kinematic_valid=None if lp_obj is None else bool(getattr(lp_obj, "kinematic_valid", False)),
+                    physical_control_eligible=pt_eligible,
+                )
+                own["pp_w"] = meta_now.get("pp_w")
+                own["mppi_w_cmd"] = meta_now.get("w_cmd")
+                own["timestamp"] = now
+                with state.lock:
+                    state._command_ownership = own
+                    state._cmd_source = str(own.get("command_source") or "")
+            except Exception:
+                own = {}
 
             with state.lock:
                 state._last_safety_zero = abs(safe_vx) < 1e-4 and abs(safe_w) < 1e-4

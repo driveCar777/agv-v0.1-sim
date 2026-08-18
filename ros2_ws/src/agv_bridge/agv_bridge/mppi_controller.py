@@ -523,6 +523,8 @@ class DiffDriveMppi:
                 "mean_dw": round(float(self._mean_dw), 4),
                 "pp_w": round(float(w_cmd), 4),
                 "w_cmd": round(float(w_cmd), 4),
+                "follow_path_source": "MANEUVER",
+                "tracking_local_plan": False,
                 "a_vx_min": round(a_vx_min, 4),
                 "a_vx_max": round(a_vx_max, 4),
                 "wz_max": round(float(self.wz_max), 4),
