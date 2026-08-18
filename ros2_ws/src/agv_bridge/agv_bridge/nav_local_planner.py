@@ -498,10 +498,19 @@ class RollingLocalPlanner:
             )
             approach_early = bool(fp is not None and getattr(fp, "approach_active", False))
             side_commit = bool(req.side_commit_ready or str(req.avoidance_phase or "").upper() == "SIDE_COMMIT")
+            corridor_side = None
+            if req.execution_corridor is not None and req.execution_corridor.constrains_side():
+                corridor_side = req.execution_corridor.committed_side or req.execution_corridor.mode
             fwd_ok = float(req.front_near) >= float(geom.front_stop_m) + 0.15
             if future_blocked or (approach_early and side_commit):
                 fwd_ok = False
-            if sc in ("OPEN", "OPEN_SPACE", "") and fwd_ok and not future_blocked:
+            if (
+                sc in ("OPEN", "OPEN_SPACE", "")
+                and fwd_ok
+                and not future_blocked
+                and not side_commit
+                and corridor_side not in ("LEFT", "RIGHT")
+            ):
                 best = valid[0].score
                 fwds = [c for c in valid if c.kind == KIND_FORWARD and c.score <= best + 1.15]
                 selected = fwds[0] if fwds else valid[0]

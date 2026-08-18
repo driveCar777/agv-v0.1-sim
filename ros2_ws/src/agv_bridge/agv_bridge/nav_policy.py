@@ -782,6 +782,8 @@ class NavigationPolicy:
         readiness_signal: str = "NONE",
         side_probe_active: bool = False,
         commit_ready: bool = False,
+        preferred_side: Optional[str] = None,
+        committed_side_avoidance: Optional[str] = None,
         dynamic_resume_clear: bool = False,
         d_probe_start_m: Optional[float] = None,
     ) -> PolicyDecision:
@@ -903,11 +905,26 @@ class NavigationPolicy:
         elif scene == "APPROACH" or flags.get("VELOCITY_BUT_PATH_STALLED"):
             state, behavior, reason = OBSTACLE_APPROACH, BEH_CAUTION, "OBSTACLE_APPROACH"
             allow_compare = front_near < DEFAULT_GEOM.front_cost_m + 0.55
-        elif str(avoidance_phase or "").upper() == "SIDE_COMMIT" and commit_ready:
+        elif str(avoidance_phase or "").upper() == "SIDE_COMMIT" and (
+            commit_ready or committed_side_avoidance in ("LEFT", "RIGHT")
+        ):
             state = LOCAL_AVOID
             allow_compare = not self.commitment.active
             reason = "SIDE_COMMIT→LOCAL_AVOID"
             flags["side_commit"] = True
+            side = (
+                committed_side_avoidance
+                or preferred_side
+                or (self.commitment.side if self.commitment.active else None)
+                or self.avoid_side
+            )
+            if side == "LEFT":
+                behavior = BEH_AVOID_LEFT
+            elif side == "RIGHT":
+                behavior = BEH_AVOID_RIGHT
+            else:
+                behavior = BEH_AVOID_LEFT if left_free >= right_free else BEH_AVOID_RIGHT
+                reason = "SIDE_COMMIT→LOCAL_AVOID|FALLBACK_FREE_SPACE"
         elif str(avoidance_phase or "").upper() == "SIDE_PROBE" or (
             side_probe_active and future_collision and readiness_signal in ("WARNING", "PREDICTED")
         ):

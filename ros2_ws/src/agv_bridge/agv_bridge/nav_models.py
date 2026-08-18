@@ -432,6 +432,8 @@ class LocalMppiModel:
                 probe_confidence_right=float(sp.right_confidence) if sp else 0.0,
                 preferred_side=sp.preferred_side if sp else None,
                 commit_ready=bool(sp.commit_ready) if sp else False,
+                left_probe_valid=bool(sp.left_valid) if sp else False,
+                right_probe_valid=bool(sp.right_valid) if sp else False,
                 committed_side_external=committed_side,
                 obstacle_passed_external=ext_passed,
                 commitment_active=bool(self.policy.commitment.active),
@@ -448,13 +450,23 @@ class LocalMppiModel:
             ).minimum_clearance_m
         except Exception:
             current_fp_clearance = None
+        exec_side = None
+        if av is not None and av.committed_side in ("LEFT", "RIGHT"):
+            exec_side = av.committed_side
+        elif sp is not None and sp.preferred_side in ("LEFT", "RIGHT"):
+            exec_side = sp.preferred_side
+        elif committed_side in ("LEFT", "RIGHT"):
+            exec_side = committed_side
+        corridor_commit_ready = bool(sp.commit_ready) if sp else False
+        if av is not None and av.phase == "SIDE_COMMIT":
+            corridor_commit_ready = True
         try:
             self.last_execution_corridor = build_execution_corridor(
                 now=now,
                 avoidance_phase=str(av.phase) if av is not None else "OPEN",
-                committed_side=committed_side,
+                committed_side=exec_side,
                 preferred_side=(sp.preferred_side if sp is not None else None),
-                commit_ready=bool(sp.commit_ready) if sp else False,
+                commit_ready=corridor_commit_ready,
                 front_near=float(front_near),
                 left_free=float(left_free),
                 right_free=float(right_free),
@@ -532,6 +544,8 @@ class LocalMppiModel:
             readiness_signal=str(av.signal) if av is not None else "NONE",
             side_probe_active=bool(sp.probe_active) if sp else False,
             commit_ready=bool(sp.commit_ready) if sp else False,
+            preferred_side=sp.preferred_side if sp is not None else None,
+            committed_side_avoidance=av.committed_side if av is not None else None,
             dynamic_resume_clear=dyn_resume_clear,
             d_probe_start_m=(av.tiers.get("d_probe_start_m") if av else None),
         )

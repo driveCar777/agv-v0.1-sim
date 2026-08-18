@@ -101,7 +101,10 @@ def build_execution_corridor(
     )
     phase = str(avoidance_phase or "").upper()
     side = committed_side or preferred_side
-    if phase in ("SIDE_COMMIT", "LOCAL_AVOID") and commit_ready and side in ("LEFT", "RIGHT"):
+    side_commit_active = phase == "SIDE_COMMIT" or (
+        phase == "LOCAL_AVOID" and side in ("LEFT", "RIGHT")
+    )
+    if side_commit_active and side in ("LEFT", "RIGHT") and (commit_ready or phase == "SIDE_COMMIT"):
         corridor.active = True
         corridor.mode = MODE_LEFT if side == "LEFT" else MODE_RIGHT
         corridor.committed_side = side

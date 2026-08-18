@@ -169,6 +169,8 @@ class AvoidancePhaseTracker:
         probe_confidence_right: float,
         preferred_side: Optional[str],
         commit_ready: bool,
+        left_probe_valid: bool = False,
+        right_probe_valid: bool = False,
         committed_side_external: Optional[str],
         obstacle_passed_external: bool,
         commitment_active: bool,
@@ -197,7 +199,9 @@ class AvoidancePhaseTracker:
         elif signal == SIGNAL_WARNING:
             phase = PHASE_SIDE_PROBE if side_probe_active else PHASE_OBSTACLE_APPROACH
         elif signal == SIGNAL_MANEUVER_READY:
-            if commit_ready and preferred_side:
+            if not (left_probe_valid or right_probe_valid):
+                phase = PHASE_OBSTACLE_APPROACH
+            elif commit_ready and preferred_side:
                 if self.state.committed_side == preferred_side and now < self.state.commit_hold_until:
                     phase = PHASE_SIDE_COMMIT
                     committed = preferred_side
