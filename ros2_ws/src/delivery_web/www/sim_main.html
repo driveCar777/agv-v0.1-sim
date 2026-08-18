@@ -312,6 +312,10 @@
       <div><b>κ / ay</b> <span id="motAy">—</span></div>
       <div><b>jerk x/ω</b> <span id="motJerk">—</span></div>
       <div><b>v limit</b> <span id="motVlim">—</span></div>
+      <div><b>Turn</b> <span id="motTurnReady">—</span></div>
+      <div><b>Obstacle</b> <span id="motObsDist">—</span></div>
+      <div><b>Planner age</b> <span id="motPlanAge">—</span></div>
+      <div><b>Control</b> <span id="motControl">—</span></div>
     </div>
   </div>
 </div>
@@ -508,7 +512,17 @@
         `${rates.longitudinal_jerk == null ? "—" : Number(rates.longitudinal_jerk).toFixed(2)} / ${rates.angular_jerk == null ? "—" : Number(rates.angular_jerk).toFixed(2)}`;
       document.getElementById("motVlim").textContent =
         `${mot.speed_limit_reason || "NORMAL"} vmax=${mot.curve_vmax == null ? "—" : Number(mot.curve_vmax).toFixed(2)}`;
-      motEl.classList.toggle("mismatch", ["OSCILLATING", "OVERSHOOT", "STALE_PLANNER", "DYNAMICS_INFEASIBLE", "SAFE_STOP"].includes(h));
+      const turn = mot.turn || nav.turn || {};
+      const tr = turn.turn_readiness || "—";
+      const obsD = turn.obstacle_distance_m ?? nav.safety_envelope?.front_near ?? snap.front_near;
+      const planAge = turn.planner_age_ms;
+      const planAgeTxt = planAge == null ? "—" : (planAge > 5000 ? `STALE ${(planAge/1000).toFixed(1)}s` : `${(planAge/1000).toFixed(2)}s`);
+      const elig = nav.local_plan_status || (nav.physical_trajectory?.control_eligible === false ? "STALE" : (nav.physical_trajectory?.control_eligible ? "VALID" : "—"));
+      document.getElementById("motTurnReady").textContent = `${tr} / ${turn.turn_feasibility || "—"}`;
+      document.getElementById("motObsDist").textContent = obsD == null ? "—" : `${Number(obsD).toFixed(2)}m · turn d=${turn.turn_required_distance_m == null ? "—" : Number(turn.turn_required_distance_m).toFixed(2)}m`;
+      document.getElementById("motPlanAge").textContent = planAgeTxt;
+      document.getElementById("motControl").textContent = `${elig} · ${nav.command_source || own.command_source || "—"}`;
+      motEl.classList.toggle("mismatch", ["OSCILLATING", "OVERSHOOT", "STALE_PLANNER", "DYNAMICS_INFEASIBLE", "SAFE_STOP"].includes(h) || tr === "LATE" || tr === "INFEASIBLE");
     }
     setBanner(snap.banner);
     updateScenePill(scene);

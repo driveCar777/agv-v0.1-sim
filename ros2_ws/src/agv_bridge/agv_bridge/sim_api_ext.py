@@ -129,6 +129,12 @@ def patch_mock_state(state) -> None:
     state._cmd_w = 0.0
     state._cmd_stamp = 0.0
     state._cmd_timeout = 0.5
+    state._command_generated_at = 0.0
+    state._command_approved_at = 0.0
+    state._prev_command_approved_at = 0.0
+    state._last_valid_command_at = 0.0
+    state._controller_watchdog_timeout_s = 0.35
+    state._turn_exec: Dict[str, Any] = {}
     state._path: List[Tuple[float, float]] = []
     state._planned_path: List[Tuple[float, float]] = []
     state._global_path: List[Tuple[float, float]] = []
@@ -1982,6 +1988,7 @@ def patch_mock_state(state) -> None:
 
             # Safety
             req_vx, req_w = float(mppi_vx), float(mppi_w)
+            state._command_generated_at = now
             limited_vx, limited_w = req_vx, req_w
             limited_blob: Dict[str, Any] = {}
             try:
@@ -2051,6 +2058,35 @@ def patch_mock_state(state) -> None:
                 safe_vx = safe_w = 0.0
                 stop_reason = STOP_NAV_FAILED
 
+            state._command_approved_at = now
+            prev_cmd_approved = float(getattr(state, "_prev_command_approved_at", 0.0) or 0.0)
+            cmd_age_ms = max(0.0, (now - prev_cmd_approved) * 1000.0) if prev_cmd_approved > 0 else 0.0
+            state._prev_command_approved_at = now
+            if nav_mode in ("tracking", "avoid") and not emergency:
+                if abs(safe_vx) > 0.01 or abs(safe_w) > 0.01:
+                    state._last_valid_command_at = now
+                elif state._last_valid_command_at > 0 and (
+                    now - state._last_valid_command_at
+                ) > float(getattr(state, "_controller_watchdog_timeout_s", 0.35) or 0.35):
+                    safe_vx = safe_w = 0.0
+                    safe_vx_reason = "COMMAND_WATCHDOG"
+                    stop_reason = STOP_SAFE
+                    try:
+                        from agv_bridge.nav_observability import OBS
+
+                        OBS.emit(
+                            "COMMAND_STALE",
+                            level="WARN",
+                            category="CONTROL",
+                            component="controller_watchdog",
+                            data={"command_age_ms": cmd_age_ms, "timeout_s": state._controller_watchdog_timeout_s},
+                            min_interval_s=1.0,
+                        )
+                    except Exception:
+                        pass
+
+            mm_now = ""
+            own: Dict[str, Any] = {}
             try:
                 from agv_bridge.nav_command_ownership import classify_command_source
 
@@ -2090,6 +2126,115 @@ def patch_mock_state(state) -> None:
                     state._cmd_source = str(own.get("command_source") or "")
             except Exception:
                 own = {}
+
+            try:
+                from agv_bridge.nav_turn_execution import build_turn_snapshot, turn_started
+                from agv_bridge.nav_trajectory_integrity import enrich_trajectory_metadata
+
+                pt_for_turn = getattr(local_mppi, "last_physical_trajectory", None)
+                pt_age_ms = None
+                pt_stale = False
+                pt_elig_turn = None
+                if isinstance(pt_for_turn, dict) and pt_for_turn:
+                    enriched_turn = enrich_trajectory_metadata(
+                        dict(pt_for_turn),
+                        vehicle={"x": x, "y": y, "angle": yaw, "vx": getattr(state, "vx", 0.0), "w": getattr(state, "w", 0.0)},
+                        now=now,
+                        current_scene_id=getattr(state, "_nav_scene_id", None),
+                        current_cycle_id=getattr(state, "_planner_cycle_id", None),
+                    )
+                    integ_t = enriched_turn.get("integrity") or {}
+                    pt_age_ms = integ_t.get("trajectory_age_ms")
+                    pt_stale = bool(integ_t.get("stale"))
+                    pt_elig_turn = enriched_turn.get("control_eligible")
+                omega_tgt = 0.28
+                if mm_now in ("LOCAL_LEFT", "TURN_IN_PLACE"):
+                    omega_tgt = abs(float(mppi_w)) if abs(float(mppi_w)) > 0.05 else 0.28
+                elif mm_now == "LOCAL_RIGHT":
+                    omega_tgt = -abs(float(mppi_w)) if abs(float(mppi_w)) > 0.05 else -0.28
+                turn_snap = build_turn_snapshot(
+                    obstacle_distance_m=float(front_near),
+                    vx=float(getattr(state, "vx", 0.0) or 0.0),
+                    omega_target=omega_tgt,
+                    omega_current=float(getattr(state, "w", 0.0) or 0.0),
+                    command_source=str(own.get("command_source") if isinstance(own, dict) else ""),
+                    trajectory_control_eligible=pt_elig_turn,
+                    trajectory_stale=pt_stale,
+                    planner_age_ms=pt_age_ms,
+                    command_age_ms=cmd_age_ms,
+                )
+                turn_dict = turn_snap.to_dict()
+                turn_dict["command_generated_at"] = state._command_generated_at
+                turn_dict["command_approved_at"] = state._command_approved_at
+                turn_dict["command_age_ms"] = cmd_age_ms
+                state._turn_exec = turn_dict
+                if turn_started(float(getattr(state, "w", 0.0) or 0.0)):
+                    try:
+                        from agv_bridge.nav_observability import OBS
+
+                        OBS.emit(
+                            "TURN_STARTED",
+                            level="INFO",
+                            category="CONTROL",
+                            component="turn_execution",
+                            data=turn_dict,
+                            min_interval_s=2.0,
+                        )
+                    except Exception:
+                        pass
+                if turn_snap.turn_readiness in ("LATE", "INFEASIBLE"):
+                    try:
+                        from agv_bridge.nav_observability import OBS
+
+                        OBS.emit(
+                            "TURN_LATE" if turn_snap.turn_readiness == "LATE" else "TURN_INFEASIBLE",
+                            level="WARN",
+                            category="CONTROL",
+                            component="turn_execution",
+                            data=turn_dict,
+                            min_interval_s=1.5,
+                        )
+                    except Exception:
+                        pass
+                if pt_stale and pt_age_ms is not None and float(pt_age_ms) > 5000.0:
+                    try:
+                        from agv_bridge.nav_observability import OBS
+
+                        OBS.emit(
+                            "LOCAL_PLAN_STALE",
+                            level="WARN",
+                            category="PLANNING",
+                            component="trajectory_integrity",
+                            data={"planner_age_ms": pt_age_ms, "control_eligible": pt_elig_turn},
+                            min_interval_s=2.0,
+                        )
+                    except Exception:
+                        pass
+                if (
+                    abs(float(mppi_w)) > 0.08
+                    and abs(float(safe_w)) < 0.03
+                    and abs(float(mppi_w)) > abs(float(safe_w)) + 0.05
+                ):
+                    try:
+                        from agv_bridge.nav_observability import OBS
+
+                        OBS.emit(
+                            "COMMAND_HANDOFF_FAILURE",
+                            level="WARN",
+                            category="CONTROL",
+                            component="command_handoff",
+                            data={
+                                "requested_omega": round(float(mppi_w), 4),
+                                "approved_omega": round(float(safe_w), 4),
+                                "safe_vx_reason": safe_vx_reason,
+                                "maneuver_mode": mm_now,
+                            },
+                            min_interval_s=1.0,
+                        )
+                    except Exception:
+                        pass
+            except Exception:
+                pass
 
             try:
                 from agv_bridge.nav_motion_dynamics import (
@@ -2158,6 +2303,7 @@ def patch_mock_state(state) -> None:
                     "speed_limit_reason": limited_blob.get("speed_limit_reason") or "NORMAL",
                     "future_max_abs_kappa": limited_blob.get("future_max_abs_kappa"),
                     "curve_vmax": limited_blob.get("curve_vmax"),
+                    "turn": dict(getattr(state, "_turn_exec", {}) or {}),
                 }
                 state._motion_prev_vx = rates.get("vx")
                 state._motion_prev_w = rates.get("omega")

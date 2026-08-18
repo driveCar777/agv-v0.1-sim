@@ -397,7 +397,7 @@ SCENARIOS: Dict[str, ScenarioSpec] = {
         label="CURVE-APPROACH",
         description="M3.9 open runway to offset goal — curvature preview then turn",
         start=dict(M32_OPEN_START),
-        goal={"x": 0.0, "y": 8.0, "poi": "CURVE_01"},
+        goal={"x": -8.0, "y": 8.0, "poi": "CURVE_01"},
         map_scene="m32_open_straight",
         test_class="MOTION_CURVE",
     ),
