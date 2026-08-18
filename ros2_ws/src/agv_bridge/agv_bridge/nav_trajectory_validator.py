@@ -34,7 +34,9 @@ REASON_AX_LIMIT = "ACCEL_LIMIT"
 REASON_CORRIDOR = "CORRIDOR_SIDE_BLOCKED"
 REASON_BRAKING = "BRAKING_INFEASIBLE"
 REASON_BRAKING_UNAVAILABLE = "BRAKING_MODEL_UNAVAILABLE"
-REASON_UNKNOWN = "UNKNOWN"
+REASON_AY_LIMIT = "LATERAL_ACCEL_LIMIT"
+REASON_ALPHA_LIMIT = "ALPHA_LIMIT"
+REASON_JERK_LIMIT = "JERK_LIMIT"
 
 
 @dataclass
@@ -232,6 +234,51 @@ def validate_trajectory(
         if not ok:
             res.reject(br_reason)
 
+    if not res.valid and res.reason == REASON_NONE:
+        res.reason = res.reasons[0] if res.reasons else REASON_UNKNOWN
+    return res
+
+
+def validate_dynamics(
+    *,
+    vx: float,
+    omega: float,
+    ax: Optional[float] = None,
+    alpha: Optional[float] = None,
+    longitudinal_jerk: Optional[float] = None,
+    angular_jerk: Optional[float] = None,
+    enforce: bool = True,
+) -> TrajectoryValidationResult:
+    """Command-level dynamics check. Collision-free is NOT sufficient."""
+    from agv_bridge.nav_motion_dynamics import get_motion_limits, lateral_accel_vw, curvature
+
+    res = TrajectoryValidationResult(source="DYNAMICS_VALIDATOR")
+    lim = get_motion_limits()
+    res.max_abs_vx = abs(float(vx))
+    res.max_abs_w = abs(float(omega))
+    ay = abs(lateral_accel_vw(vx, omega))
+    kap = curvature(vx, omega)
+    if not enforce:
+        return res
+    if abs(vx) > lim.max_vx_mps + 1e-6:
+        res.reject(REASON_VX_LIMIT)
+    if abs(omega) > lim.max_omega_rad_s + 1e-6:
+        res.reject(REASON_W_LIMIT)
+    if ax is not None and abs(ax) > lim.max_accel_mps2 + 1e-6:
+        res.reject(REASON_AX_LIMIT)
+    if alpha is not None and abs(alpha) > lim.max_alpha_rad_s2 + 1e-6:
+        res.reject(REASON_ALPHA_LIMIT)
+    if ay > lim.max_lateral_accel_mps2 + 1e-6:
+        res.reject(REASON_AY_LIMIT)
+    if longitudinal_jerk is not None and lim.max_longitudinal_jerk_mps3 is not None:
+        if abs(longitudinal_jerk) > lim.max_longitudinal_jerk_mps3 + 1e-6:
+            res.reject(REASON_JERK_LIMIT)
+    if angular_jerk is not None and lim.max_angular_jerk_rps3 is not None:
+        if abs(angular_jerk) > lim.max_angular_jerk_rps3 + 1e-6:
+            res.reject(REASON_JERK_LIMIT)
+    res.max_abs_ax = abs(ax or 0.0)
+    if kap is not None:
+        res.reasons  # keep
     if not res.valid and res.reason == REASON_NONE:
         res.reason = res.reasons[0] if res.reasons else REASON_UNKNOWN
     return res
