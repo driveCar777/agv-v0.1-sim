@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import math
 import os
+import time
 from typing import Any, Dict, List, Optional, Tuple
 
 from agv_bridge.mppi_controller import DiffDriveMppi, MppiResult, get_control_mode
@@ -72,6 +73,12 @@ from agv_bridge.nav_recovery import (
     evaluate_recovery,
 )
 from agv_bridge.path_progress import project_pose_to_path
+from agv_bridge.nav_trajectory_integrity import (
+    TRAJ_KIND_BACKWARD_FUTURE,
+    TRAJ_KIND_FORWARD_FUTURE,
+    TRAJ_KIND_HISTORICAL_RETREAT,
+    control_eligible_for_kind,
+)
 
 Pt = Tuple[float, float]
 
@@ -144,7 +151,14 @@ class LocalMppiModel:
         self._path_version = 0
         self.breadcrumb = TrajectoryBreadcrumb()
         self.last_recovery = None
-        self.last_physical_trajectory = None  # active corridor dict for UI
+        self.last_physical_trajectory = None  # control-eligible FORWARD/LEFT/RIGHT only
+        self.last_retreat_trajectory = None  # HISTORICAL_RETREAT / BACKWARD — visualization only
+        self.last_selected_trajectory = None
+        self.planner_cycle_id = 0
+        self.scene_id = 0
+        self.planner_input_timestamp = 0.0
+        self.planner_start_timestamp = 0.0
+        self.planner_finish_timestamp = 0.0
         self._prev_progress_s = 0.0
         self._prev_progress_ts = 0.0
         self.last_path_valid = True
@@ -194,6 +208,12 @@ class LocalMppiModel:
         self.breadcrumb.reset()
         self.last_recovery = None
         self.last_physical_trajectory = None
+        self.last_retreat_trajectory = None
+        self.last_selected_trajectory = None
+        self.planner_cycle_id = 0
+        self.planner_input_timestamp = 0.0
+        self.planner_start_timestamp = 0.0
+        self.planner_finish_timestamp = 0.0
         self.speed_policy.reset()
         self.local_planner.reset()
         self.last_speed = None
@@ -270,6 +290,10 @@ class LocalMppiModel:
         safety_zero: bool = False,
         planned_rejected_by_safety: bool = False,
     ) -> MppiResult:
+        self.planner_cycle_id = int(self.planner_cycle_id or 0) + 1
+        self.planner_input_timestamp = float(now)
+        self.planner_start_timestamp = time.time()
+
         def collide(px: float, py: float) -> bool:
             return world.collides(px, py, robot_r=self.geom.local_radius, include_actors=True)
 
@@ -614,13 +638,15 @@ class LocalMppiModel:
         except Exception:
             self.last_recovery = None
 
-        # Active physical trajectory = prefer authorized/active maneuver side corridor from Probe
+        # Active physical trajectory = current-cycle FORWARD/LEFT/RIGHT only.
+        # HISTORICAL_RETREAT / BACKWARD are visualization-only and never control-eligible.
         try:
-            self.last_physical_trajectory = self._select_active_corridor(
+            self._publish_active_corridors(
                 live_auth=live_auth, auth_side=auth_side, recovery=self.last_recovery
             )
         except Exception:
             self.last_physical_trajectory = None
+            self.last_retreat_trajectory = None
 
         # Refresh decision flags after authorize
         if self.policy.last_decision is not None:
@@ -1118,6 +1144,8 @@ class LocalMppiModel:
             )
         except Exception:
             pass
+        self.planner_finish_timestamp = time.time()
+        self._stamp_published_trajectories()
         return res
 
     def _recovery_target_distance_m(self) -> float:
@@ -1135,6 +1163,124 @@ class LocalMppiModel:
             return min(1.5, max(0.5, float(clr) * 0.7))
         return 1.0
 
+    def _corridor_as_dict(self, corr: Any, fallback: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        if corr is not None and hasattr(corr, "to_dict") and callable(corr.to_dict):
+            d = corr.to_dict()
+            if isinstance(d, dict) and d:
+                return dict(d)
+        if isinstance(corr, dict) and corr:
+            return dict(corr)
+        return dict(fallback or {})
+
+    def _build_traj_dict(
+        self,
+        corr: Any,
+        *,
+        source: str,
+        kind: str,
+        fallback_pr: Any = None,
+    ) -> Optional[Dict[str, Any]]:
+        fb: Dict[str, Any] = {}
+        if fallback_pr is not None and not corr:
+            fb = {
+                "source": source,
+                "status": getattr(fallback_pr, "status", "UNKNOWN"),
+                "valid": getattr(fallback_pr, "status", "") == "VALID",
+                "collision": bool(getattr(fallback_pr, "collision", False)),
+                "min_clearance": getattr(fallback_pr, "min_clearance", None),
+                "poses": list(getattr(fallback_pr, "poses", None) or [])[:24],
+                "note": "ProbeResult without corridor attach",
+            }
+        d = self._corridor_as_dict(corr, fb)
+        if not d:
+            return None
+        d["source"] = str(d.get("source") or source)
+        d["trajectory_source"] = str(source)
+        d["trajectory_kind"] = kind
+        eligible = control_eligible_for_kind(kind)
+        d["control_eligible"] = eligible
+        d["visualization_only"] = not eligible
+        d["trajectory_is_control_eligible"] = eligible
+        d["trajectory_is_visualization_only"] = not eligible
+        return d
+
+    def _stamp_published_trajectories(self) -> None:
+        finish = float(self.planner_finish_timestamp or time.time())
+        for attr in ("last_physical_trajectory", "last_retreat_trajectory"):
+            d = getattr(self, attr, None)
+            if not isinstance(d, dict) or not d:
+                continue
+            d["planner_cycle_id"] = int(self.planner_cycle_id)
+            d["trajectory_cycle_id"] = int(self.planner_cycle_id)
+            d["scene_id"] = self.scene_id
+            d["planner_input_timestamp"] = float(self.planner_input_timestamp or 0.0)
+            d["planner_start_timestamp"] = float(self.planner_start_timestamp or 0.0)
+            d["planner_finish_timestamp"] = finish
+            d["vehicle_state_timestamp"] = float(self.planner_input_timestamp or 0.0)
+            d["trajectory_generated_at"] = finish
+            d["trajectory_timestamp"] = finish
+            setattr(self, attr, d)
+        self.last_selected_trajectory = self.last_physical_trajectory
+
+    def _publish_active_corridors(
+        self,
+        *,
+        live_auth: bool,
+        auth_side: Optional[str],
+        recovery,
+    ) -> None:
+        """Publish current-cycle future physical separately from retreat/history."""
+        self.last_physical_trajectory = None
+        self.last_retreat_trajectory = None
+        pb = self.last_probe
+        if pb is None:
+            return
+        if recovery is not None and recovery.action == ACT_HISTORICAL_RETREAT and recovery.retreat:
+            corr = getattr(recovery.retreat, "corridor", None)
+            self.last_retreat_trajectory = self._build_traj_dict(
+                corr,
+                source="HISTORICAL_RETREAT",
+                kind=TRAJ_KIND_HISTORICAL_RETREAT,
+            )
+            return
+        if recovery is not None and recovery.action == ACT_LOCAL_REVERSE:
+            pr = pb.backward
+            self.last_retreat_trajectory = self._build_traj_dict(
+                getattr(pr, "corridor", None) if pr is not None else None,
+                source="BACKWARD",
+                kind=TRAJ_KIND_BACKWARD_FUTURE,
+                fallback_pr=pr,
+            )
+            return
+        mm = str(self.maneuver.mode or "").upper()
+        if "REVERSE" in mm:
+            pr = pb.backward
+            self.last_retreat_trajectory = self._build_traj_dict(
+                getattr(pr, "corridor", None) if pr is not None else None,
+                source="BACKWARD",
+                kind=TRAJ_KIND_BACKWARD_FUTURE,
+                fallback_pr=pr,
+            )
+            return
+        src = "FORWARD"
+        pr = pb.forward
+        if live_auth and auth_side == "LEFT":
+            src, pr = "LEFT", pb.left
+        elif live_auth and auth_side == "RIGHT":
+            src, pr = "RIGHT", pb.right
+        elif "LEFT" in mm:
+            src, pr = "LEFT", pb.left
+        elif "RIGHT" in mm:
+            src, pr = "RIGHT", pb.right
+        if pr is None:
+            return
+        self.last_physical_trajectory = self._build_traj_dict(
+            getattr(pr, "corridor", None),
+            source=src,
+            kind=TRAJ_KIND_FORWARD_FUTURE,
+            fallback_pr=pr,
+        )
+
     def _select_active_corridor(
         self,
         *,
@@ -1142,42 +1288,9 @@ class LocalMppiModel:
         auth_side: Optional[str],
         recovery,
     ) -> Optional[Dict[str, Any]]:
-        """Pick UI/active PhysicalTrajectoryCorridor from Probe (shared poses)."""
-        pb = self.last_probe
-        if pb is None:
-            return None
-        src = "FORWARD"
-        pr = pb.forward
-        if recovery is not None and recovery.action == ACT_HISTORICAL_RETREAT and recovery.retreat:
-            if recovery.retreat.corridor is not None:
-                return recovery.retreat.corridor.to_dict()
-        if recovery is not None and recovery.action == ACT_LOCAL_REVERSE:
-            src, pr = "BACKWARD", pb.backward
-        elif live_auth and auth_side == "LEFT":
-            src, pr = "LEFT", pb.left
-        elif live_auth and auth_side == "RIGHT":
-            src, pr = "RIGHT", pb.right
-        else:
-            mm = str(self.maneuver.mode or "").upper()
-            if "LEFT" in mm:
-                src, pr = "LEFT", pb.left
-            elif "RIGHT" in mm:
-                src, pr = "RIGHT", pb.right
-            elif "REVERSE" in mm:
-                src, pr = "BACKWARD", pb.backward
-        if pr is None:
-            return None
-        if pr.corridor:
-            return pr.corridor
-        return {
-            "source": src,
-            "status": pr.status,
-            "valid": pr.status == "VALID",
-            "collision": pr.collision,
-            "min_clearance": pr.min_clearance,
-            "poses": list(pr.poses or [])[:24],
-            "note": "ProbeResult without corridor attach",
-        }
+        """Compat wrapper — future physical only."""
+        self._publish_active_corridors(live_auth=live_auth, auth_side=auth_side, recovery=recovery)
+        return self.last_physical_trajectory
 
 
 LocalPathPlannerModel = LocalMppiModel

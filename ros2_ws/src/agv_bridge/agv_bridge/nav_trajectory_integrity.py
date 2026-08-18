@@ -10,12 +10,24 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 Pt = Tuple[float, float]
 
 TRAJ_KIND_FUTURE_PHYSICAL = "FUTURE_LOCAL_PHYSICAL"
+TRAJ_KIND_FORWARD_FUTURE = "FORWARD_FUTURE"
+TRAJ_KIND_BACKWARD_FUTURE = "BACKWARD_FUTURE"
+TRAJ_KIND_HISTORICAL_RETREAT = "HISTORICAL_RETREAT"
 TRAJ_KIND_FUTURE_ROLLING = "FUTURE_ROLLING_LOCAL_PLAN"
 TRAJ_KIND_EXECUTED_KINEMATIC = "EXECUTED_KINEMATIC_BAND"
 TRAJ_KIND_HISTORY_BREADCRUMB = "HISTORY_BREADCRUMB"
 TRAJ_KIND_GLOBAL = "GLOBAL_REFERENCE"
+TRAJ_KIND_NONE = "NONE"
+TRAJ_KIND_STALE = "STALE_TRAJECTORY"
 
 FRAME_MAP = "map"
+REVERSE_ARC_IMPLEMENTED = False
+PLANNER_PERIOD_S = 0.20
+CONTROL_LATENCY_S = 0.10
+
+_FUTURE_SOURCES = {"FORWARD", "LEFT", "RIGHT", "FORWARD_FUTURE"}
+_BACKWARD_SOURCES = {"BACKWARD", "REVERSE", "BACKWARD_FUTURE"}
+_HISTORY_SOURCES = {"HISTORICAL_RETREAT", "EXECUTED", "BREADCRUMB", "HISTORY"}
 
 
 def _wrap(a: float) -> float:
@@ -110,21 +122,71 @@ def trajectory_age_ms(traj: Dict[str, Any], now: Optional[float] = None) -> Opti
     return max(0.0, (float(now or time.time()) - float(ts)) * 1000.0)
 
 
+def classify_source_kind(source: Any) -> str:
+    src = str(source or "").upper()
+    if src in _HISTORY_SOURCES or "RETREAT" in src:
+        return TRAJ_KIND_HISTORICAL_RETREAT
+    if src in _BACKWARD_SOURCES:
+        return TRAJ_KIND_BACKWARD_FUTURE
+    if src in _FUTURE_SOURCES:
+        return TRAJ_KIND_FORWARD_FUTURE
+    if not src or src in ("NONE", "NULL"):
+        return TRAJ_KIND_NONE
+    return TRAJ_KIND_NONE
+
+
+def control_eligible_for_kind(kind: str) -> bool:
+    if kind == TRAJ_KIND_FORWARD_FUTURE:
+        return True
+    if kind == TRAJ_KIND_BACKWARD_FUTURE:
+        return False  # REVERSE_ARC = NOT IMPLEMENTED
+    return False
+
+
 def classify_display_source(snap: Dict[str, Any]) -> str:
     nav = snap.get("nav") or {}
     pt = nav.get("physical_trajectory") or {}
-    if pt and (pt.get("poses") or pt.get("centerline")):
-        return TRAJ_KIND_FUTURE_PHYSICAL
+    kind = str(pt.get("trajectory_kind") or "")
+    if (
+        pt
+        and (pt.get("poses") or pt.get("centerline"))
+        and pt.get("control_eligible") is True
+        and kind == TRAJ_KIND_FORWARD_FUTURE
+    ):
+        return TRAJ_KIND_FORWARD_FUTURE
+    retreat = nav.get("retreat_trajectory") or nav.get("historical_retreat") or {}
+    if retreat and (retreat.get("poses") or retreat.get("centerline")):
+        rk = str(retreat.get("trajectory_kind") or classify_source_kind(retreat.get("source")))
+        if rk == TRAJ_KIND_HISTORICAL_RETREAT:
+            return TRAJ_KIND_HISTORICAL_RETREAT
+        if rk == TRAJ_KIND_BACKWARD_FUTURE:
+            return TRAJ_KIND_BACKWARD_FUTURE
     lp = nav.get("local_plan") or {}
     if lp.get("poses") and lp.get("active") is not False:
         return TRAJ_KIND_FUTURE_ROLLING
     if nav.get("local_path"):
         return TRAJ_KIND_EXECUTED_KINEMATIC
-    return "NONE"
+    return TRAJ_KIND_NONE
+
+
+def max_reanchor_shift_m(
+    *,
+    vehicle_speed_mps: float,
+    planner_period_s: float = PLANNER_PERIOD_S,
+    control_latency_s: float = CONTROL_LATENCY_S,
+) -> float:
+    """Derived max translation. 2m-class shifts are STALE, not reanchorable."""
+    return max_anchor_tolerance_m(
+        vehicle_speed_mps=vehicle_speed_mps,
+        planner_period_s=planner_period_s,
+        control_latency_s=control_latency_s,
+        min_m=0.08,
+        max_m=0.40,
+    )
 
 
 def reanchor_trajectory_poses(traj: Dict[str, Any], vehicle: Dict[str, Any]) -> Dict[str, Any]:
-    """Shift map-frame trajectory so poses[0] aligns with current vehicle (planner lag fix)."""
+    """Optional small map-frame nudge. Caller must already have passed freshness checks."""
     out = dict(traj or {})
     p0 = _first_pose(out)
     if not p0:
@@ -162,39 +224,148 @@ def enrich_trajectory_metadata(
     *,
     vehicle: Dict[str, Any],
     now: Optional[float] = None,
-    planner_period_s: float = 0.20,
+    planner_period_s: float = PLANNER_PERIOD_S,
+    current_scene_id: Optional[Any] = None,
+    current_cycle_id: Optional[Any] = None,
 ) -> Dict[str, Any]:
-    """Attach M3.8 integrity fields to a trajectory dict (in-place copy)."""
+    """Attach integrity fields. Does NOT reanchor stale / history / backward into a fake future."""
     out = dict(traj or {})
     tnow = float(now or time.time())
-    out.setdefault("frame_id", FRAME_MAP)
-    out.setdefault("trajectory_kind", TRAJ_KIND_FUTURE_PHYSICAL)
-    out.setdefault("trajectory_timestamp", out.get("generated_at") or tnow)
-    out["vehicle_timestamp"] = tnow
+    src = out.get("source") or out.get("trajectory_source")
+    kind = classify_source_kind(src) if src else classify_source_kind(out.get("trajectory_kind"))
+    if str(out.get("trajectory_kind") or "").upper() in (
+        TRAJ_KIND_HISTORICAL_RETREAT,
+        TRAJ_KIND_BACKWARD_FUTURE,
+        TRAJ_KIND_FORWARD_FUTURE,
+    ):
+        kind = str(out["trajectory_kind"]).upper()
+    eligible = control_eligible_for_kind(kind)
+    viz_only = not eligible
+    out["frame_id"] = FRAME_MAP
+    out["trajectory_kind"] = kind
+    out["trajectory_source"] = str(src or kind)
+    out["control_eligible"] = eligible
+    out["visualization_only"] = viz_only
+    generated = (
+        out.get("trajectory_generated_at")
+        or out.get("planner_finish_timestamp")
+        or out.get("generated_at")
+        or out.get("trajectory_timestamp")
+    )
     out["sample_timestamp"] = tnow
+    out["vehicle_timestamp"] = tnow
+    if generated is not None:
+        out["trajectory_generated_at"] = float(generated)
+        out["trajectory_timestamp"] = float(generated)
+    else:
+        out["trajectory_timestamp"] = None
+        out["timestamp_status"] = "CALIBRATION_REQUIRED"
     spd = abs(float(vehicle.get("vx") or vehicle.get("speed") or 0))
     omega = float(vehicle.get("w") or 0)
-    ae0 = anchor_error_m(vehicle, out)
-    tol_m = max_anchor_tolerance_m(vehicle_speed_mps=spd, planner_period_s=planner_period_s)
-    if ae0 is not None and tol_m is not None and ae0 > tol_m and spd > 0.04:
+    ae_raw = anchor_error_m(vehicle, out)
+    max_shift = max_reanchor_shift_m(vehicle_speed_mps=spd, planner_period_s=planner_period_s)
+    age = trajectory_age_ms(out, tnow) if generated is not None else None
+    max_age_ms = (planner_period_s + 0.35) * 1000.0
+    stale_reasons: List[str] = []
+    if kind in (TRAJ_KIND_HISTORICAL_RETREAT, TRAJ_KIND_BACKWARD_FUTURE, TRAJ_KIND_NONE):
+        eligible = False
+        viz_only = True
+        out["control_eligible"] = False
+        out["visualization_only"] = True
+    if age is not None and age > max_age_ms:
+        stale_reasons.append("AGE")
+    if ae_raw is not None and ae_raw > max_shift:
+        stale_reasons.append("ANCHOR")
+    scene_ok = True
+    if current_scene_id is not None and out.get("scene_id") is not None:
+        if str(out.get("scene_id")) != str(current_scene_id):
+            stale_reasons.append("SCENE")
+            scene_ok = False
+            out["integrity_reject"] = "TRAJECTORY_STALE_SCENE"
+    if current_scene_id is not None and out.get("scene_id") is None:
+        stale_reasons.append("SCENE")
+        scene_ok = False
+        out["integrity_reject"] = "TRAJECTORY_STALE_SCENE"
+    if current_cycle_id is not None and out.get("planner_cycle_id") is not None:
+        if int(out.get("planner_cycle_id") or -1) != int(current_cycle_id):
+            out["cycle_mismatch"] = True
+            stale_reasons.append("CYCLE")
+            out["integrity_reject"] = out.get("integrity_reject") or "TRAJECTORY_CYCLE_MISMATCH"
+            eligible = False
+            out["control_eligible"] = False
+            out["visualization_only"] = True
+    # Optional small reanchor only for valid forward future within derived shift.
+    if (
+        eligible
+        and not stale_reasons
+        and ae_raw is not None
+        and 1e-4 < ae_raw <= max_shift
+        and spd > 0.04
+    ):
         out = reanchor_trajectory_poses(out, vehicle)
-        out["stale_reanchor_applied"] = True
+        out["stale_reanchor_applied"] = False
+        out["small_reanchor_applied"] = True
+    elif stale_reasons:
+        out["stale_reanchor_applied"] = False
+        out["control_eligible"] = False
+        out["visualization_only"] = True
+        if "SCENE" in stale_reasons:
+            out["integrity_reject"] = "TRAJECTORY_STALE_SCENE"
+        elif "CYCLE" in stale_reasons:
+            out["integrity_reject"] = "TRAJECTORY_CYCLE_MISMATCH"
+        elif "ANCHOR" in stale_reasons or "AGE" in stale_reasons:
+            out["trajectory_kind"] = TRAJ_KIND_STALE if kind == TRAJ_KIND_FORWARD_FUTURE else kind
+            out["integrity_reject"] = "STALE_TRAJECTORY"
     ae = anchor_error_m(vehicle, out)
     ay = anchor_yaw_error_deg(vehicle, out)
-    age = trajectory_age_ms(out, tnow)
-    tol_m = max_anchor_tolerance_m(vehicle_speed_mps=spd, planner_period_s=planner_period_s)
-    tol_y = max_anchor_yaw_deg(vehicle_omega_rad_s=omega, planner_period_s=planner_period_s)
+    direction_dot = None
+    direction_angle = None
+    try:
+        from agv_bridge.nav_trajectory_direction import direction_metrics
+
+        raw_poses = out.get("poses") or out.get("centerline") or []
+        dposes = []
+        for p in raw_poses:
+            if isinstance(p, dict) and p.get("x") is not None and p.get("y") is not None:
+                dposes.append(p)
+            elif isinstance(p, (list, tuple)) and len(p) >= 2:
+                dposes.append({"x": float(p[0]), "y": float(p[1])})
+        if len(dposes) >= 2:
+            dm = direction_metrics(vehicle, dposes)
+            direction_dot = dm.get("direction_dot")
+            direction_angle = dm.get("direction_angle_deg")
+    except Exception:
+        pass
+    out["control_eligible"] = bool(out.get("control_eligible"))
+    out["visualization_only"] = not bool(out.get("control_eligible"))
+    out["trajectory_is_control_eligible"] = out["control_eligible"]
+    out["trajectory_is_visualization_only"] = out["visualization_only"]
+    out["direction_dot"] = direction_dot
+    out["direction_angle"] = direction_angle
     out["integrity"] = {
         "anchor_error_m": None if ae is None else round(ae, 4),
+        "raw_anchor_error_m": None if ae_raw is None else round(ae_raw, 4),
         "anchor_yaw_error_deg": None if ay is None else round(ay, 2),
         "trajectory_age_ms": None if age is None else round(age, 1),
         "planner_age_ms": None if age is None else round(age, 1),
-        "max_anchor_error_m": round(tol_m, 4),
-        "max_anchor_yaw_deg": round(tol_y, 2),
-        "stale": bool(age is not None and age > (planner_period_s + 0.35) * 1000.0),
-        "stale_reanchor_applied": bool(out.get("stale_reanchor_applied")),
+        "max_anchor_error_m": round(max_shift, 4),
+        "max_reanchor_shift_m": round(max_shift, 4),
+        "max_anchor_yaw_deg": round(
+            max_anchor_yaw_deg(vehicle_omega_rad_s=omega, planner_period_s=planner_period_s), 2
+        ),
+        "stale": bool(stale_reasons),
+        "stale_reasons": stale_reasons,
+        "stale_reanchor_applied": False,
+        "small_reanchor_applied": bool(out.get("small_reanchor_applied")),
         "reanchor_shift_m": out.get("reanchor_shift_m"),
         "behind_vehicle": _trajectory_behind_vehicle(vehicle, out),
+        "scene_ok": scene_ok,
+        "control_eligible": bool(out.get("control_eligible")),
+        "integrity_reject": out.get("integrity_reject"),
+        "direction_dot": direction_dot,
+        "direction_angle_deg": direction_angle,
+        "planner_cycle_id": out.get("planner_cycle_id"),
+        "scene_id": out.get("scene_id"),
     }
     return out
 
@@ -233,21 +404,39 @@ def audit_snapshot_trajectory(snap: Dict[str, Any], *, now: Optional[float] = No
         status = "WARN"
 
     enriched_pt = None
-    if pt and (pt.get("poses") or pt.get("centerline")):
-        enriched_pt = enrich_trajectory_metadata(pt, vehicle=agv, now=tnow)
+    if pt and (pt.get("poses") or pt.get("centerline") or pt.get("trajectory_kind")):
+        enriched_pt = enrich_trajectory_metadata(
+            pt,
+            vehicle=agv,
+            now=tnow,
+            current_scene_id=nav.get("nav_scene_id") or snap.get("nav_scene_id"),
+            current_cycle_id=nav.get("planner_cycle_id") or snap.get("planner_cycle_id"),
+        )
         integ = enriched_pt.get("integrity") or {}
-        ae = integ.get("anchor_error_m")
-        tol = integ.get("max_anchor_error_m")
-        if ae is not None and tol is not None and ae > tol:
-            issues.append("ANCHOR_ERROR_EXCEEDED")
+        kind = str(enriched_pt.get("trajectory_kind") or "")
+        if kind == TRAJ_KIND_HISTORICAL_RETREAT and enriched_pt.get("control_eligible"):
+            issues.append("HISTORY_MARKED_CONTROL_ELIGIBLE")
             status = "FAIL"
-        if integ.get("behind_vehicle") and not integ.get("stale_reanchor_applied"):
-            issues.append("TRAJECTORY_BEHIND_VEHICLE")
+        if kind == TRAJ_KIND_BACKWARD_FUTURE and enriched_pt.get("control_eligible"):
+            issues.append("BACKWARD_MARKED_CONTROL_ELIGIBLE")
             status = "FAIL"
-        if integ.get("stale"):
+        if kind == TRAJ_KIND_STALE:
             issues.append("STALE_TRAJECTORY")
             if status != "FAIL":
                 status = "WARN"
+        if integ.get("stale_reanchor_applied"):
+            issues.append("STALE_REANCHOR_MASK")
+            status = "FAIL"
+        ae = integ.get("raw_anchor_error_m") if integ.get("raw_anchor_error_m") is not None else integ.get("anchor_error_m")
+        tol = integ.get("max_reanchor_shift_m") or integ.get("max_anchor_error_m")
+        if (
+            enriched_pt.get("control_eligible")
+            and ae is not None
+            and tol is not None
+            and ae > tol
+        ):
+            issues.append("ANCHOR_ERROR_EXCEEDED")
+            status = "FAIL"
     elif nav.get("mode") in ("tracking", "avoid"):
         issues.append("NO_FUTURE_PHYSICAL_TRAJECTORY")
         status = "UNVERIFIED"
