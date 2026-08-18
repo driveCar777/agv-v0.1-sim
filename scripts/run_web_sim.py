@@ -329,6 +329,7 @@ class SimApp:
             path_rev = int(getattr(self.state, "_global_path_revision", 0) or 0)
             obstacle_preview = dict(getattr(self.state, "_obstacle_preview", {}) or {})
             command_own = dict(getattr(self.state, "_command_ownership", {}) or {})
+            motion = dict(getattr(self.state, "_motion", {}) or {})
         navigating = nav_mode in ("tracking", "avoid", "planned", "planner_debug")
         if lite:
             surround = list(getattr(self.state, "_cached_surround_cloud", []) or live)
@@ -557,6 +558,13 @@ class SimApp:
                 "visualization_control_mismatch": viz_mismatch,
                 "local_plan_status": local_plan_status,
                 "pp_w": command_own.get("pp_w"),
+                "motion": motion or {},
+                "motion_health": (motion or {}).get("health") or "NORMAL",
+                "limited_vx": (motion or {}).get("limited_vx"),
+                "limited_omega": (motion or {}).get("limited_omega"),
+                "speed_limit_reason": (motion or {}).get("speed_limit_reason"),
+                "curve_vmax": (motion or {}).get("curve_vmax"),
+                "future_max_abs_kappa": (motion or {}).get("future_max_abs_kappa"),
                 "global_path_heading": None if global_path_heading is None else round(float(global_path_heading), 4),
                 "command_actual_sign": cmd_act.get("command_actual_sign"),
                 "actuator_direction_mismatch": bool(cmd_act.get("actuator_direction_mismatch")),

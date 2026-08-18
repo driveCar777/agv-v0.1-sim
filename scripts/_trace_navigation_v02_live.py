@@ -60,6 +60,7 @@ _SCENE_FILE_TAG = {
     "ONLINE-LEFT": "ONLINE-LEFT-static-left",
     "ONLINE-RIGHT": "ONLINE-RIGHT-static-right",
     "ONLINE-BOTH-BLOCKED": "ONLINE-BOTH-blocked",
+    "SCENE-CURVE-01": "SCENE-CURVE-01-approach",
 }
 
 
@@ -258,6 +259,17 @@ def _sample_v02(client: NavLiveClient, seq: int, scene: str, setup_meta: dict) -
         "global_path_heading": nav.get("global_path_heading"),
         "command_actual_sign": nav.get("command_actual_sign"),
         "actuator_direction_mismatch": nav.get("actuator_direction_mismatch"),
+        "motion_health": nav.get("motion_health"),
+        "limited_omega": nav.get("limited_omega"),
+        "speed_limit_reason": nav.get("speed_limit_reason"),
+        "curve_vmax": nav.get("curve_vmax"),
+        "future_max_abs_kappa": nav.get("future_max_abs_kappa"),
+        "ax": (nav.get("motion") or {}).get("rates", {}).get("ax") if isinstance(nav.get("motion"), dict) else None,
+        "alpha": (nav.get("motion") or {}).get("rates", {}).get("alpha") if isinstance(nav.get("motion"), dict) else None,
+        "lateral_acceleration": (nav.get("motion") or {}).get("rates", {}).get("lateral_acceleration") if isinstance(nav.get("motion"), dict) else None,
+        "oscillation_score": ((nav.get("motion") or {}).get("oscillation") or {}).get("oscillation_score") if isinstance(nav.get("motion"), dict) else None,
+        "heading_overshoot": ((nav.get("motion") or {}).get("overshoot") or {}).get("heading_overshoot") if isinstance(nav.get("motion"), dict) else None,
+        "limit_cycle_suspected": (nav.get("motion") or {}).get("limit_cycle_suspected") if isinstance(nav.get("motion"), dict) else None,
     }
     row["trajectory_side"] = _traj_side(row.get("direction_angle") or (pt.get("direction_angle") if pt else None))
     return row

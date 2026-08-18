@@ -305,6 +305,14 @@
       <div><b>Actual ω</b> <span id="cmdActW">—</span></div>
       <div><b>Local plan</b> <span id="cmdLp">—</span></div>
     </div>
+    <div id="motionHealth" class="cmd-owner" style="left:auto;right:12px;min-width:240px">
+      <div><b>Motion</b> <span id="motHealth">—</span></div>
+      <div><b>v / ω</b> <span id="motVw">—</span></div>
+      <div><b>ax / α</b> <span id="motAx">—</span></div>
+      <div><b>κ / ay</b> <span id="motAy">—</span></div>
+      <div><b>jerk x/ω</b> <span id="motJerk">—</span></div>
+      <div><b>v limit</b> <span id="motVlim">—</span></div>
+    </div>
   </div>
 </div>
 
@@ -483,6 +491,24 @@
       document.getElementById("cmdActW").textContent = Number(nav.state_w ?? agv.w ?? 0).toFixed(3);
       document.getElementById("cmdLp").textContent = lpst + (nav.visualization_control_mismatch ? " · VIZ≠CMD" : "");
       cmdEl.classList.toggle("mismatch", !!nav.visualization_control_mismatch || lpst === "STALE_FALLBACK");
+    }
+    const motEl = document.getElementById("motionHealth");
+    if (motEl) {
+      const mot = nav.motion || {};
+      const rates = mot.rates || {};
+      const h = nav.motion_health || mot.health || "NORMAL";
+      document.getElementById("motHealth").textContent = h;
+      document.getElementById("motVw").textContent =
+        `${Number(nav.state_vx ?? 0).toFixed(2)} / ${Number(nav.state_w ?? 0).toFixed(3)}`;
+      document.getElementById("motAx").textContent =
+        `${Number(rates.ax ?? 0).toFixed(2)} / ${Number(rates.alpha ?? 0).toFixed(2)}`;
+      document.getElementById("motAy").textContent =
+        `${rates.curvature == null ? "—" : Number(rates.curvature).toFixed(2)} / ${Number(rates.lateral_acceleration ?? 0).toFixed(3)}`;
+      document.getElementById("motJerk").textContent =
+        `${rates.longitudinal_jerk == null ? "—" : Number(rates.longitudinal_jerk).toFixed(2)} / ${rates.angular_jerk == null ? "—" : Number(rates.angular_jerk).toFixed(2)}`;
+      document.getElementById("motVlim").textContent =
+        `${mot.speed_limit_reason || "NORMAL"} vmax=${mot.curve_vmax == null ? "—" : Number(mot.curve_vmax).toFixed(2)}`;
+      motEl.classList.toggle("mismatch", ["OSCILLATING", "OVERSHOOT", "STALE_PLANNER", "DYNAMICS_INFEASIBLE", "SAFE_STOP"].includes(h));
     }
     setBanner(snap.banner);
     updateScenePill(scene);
