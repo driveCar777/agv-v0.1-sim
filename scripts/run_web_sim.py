@@ -8,8 +8,10 @@ from __future__ import annotations
 
 import json
 import math
+import os
 import socket
 import struct
+import subprocess
 import sys
 import threading
 import time
@@ -39,6 +41,58 @@ from agv_bridge.sim_api_ext import patch_mock_state  # noqa: E402
 from agv_bridge.sim_world import get_world  # noqa: E402
 
 WWW = ROOT / "ros2_ws" / "src" / "delivery_web" / "www"
+WEB_SIM_PORT = 19999
+
+
+def _read_build_commit() -> str:
+    try:
+        r = subprocess.run(
+            ["git", "rev-parse", "--short", "HEAD"],
+            cwd=str(ROOT),
+            capture_output=True,
+            text=True,
+            timeout=3,
+        )
+        if r.returncode == 0 and r.stdout.strip():
+            return r.stdout.strip()
+    except Exception:
+        pass
+    return "unknown"
+
+
+def _port_listening_pids(port: int) -> list[int]:
+    pids: list[int] = []
+    try:
+        out = subprocess.check_output(["netstat", "-ano"], text=True, errors="replace")
+        token = f":{port}"
+        for line in out.splitlines():
+            upper = line.upper()
+            if token in line and "LISTENING" in upper:
+                parts = line.split()
+                if parts:
+                    try:
+                        pids.append(int(parts[-1]))
+                    except ValueError:
+                        continue
+    except Exception:
+        pass
+    return list(dict.fromkeys(pids))
+
+
+def _ensure_single_sim_instance(port: int) -> None:
+    pids = _port_listening_pids(port)
+    if pids:
+        print(f"[web_sim] ERROR: port {port} already LISTENING — PID(s): {', '.join(map(str, pids))}", flush=True)
+        print("[web_sim] Stop the existing simulator before starting another instance.", flush=True)
+        raise SystemExit(2)
+    probe = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        probe.bind(("0.0.0.0", port))
+    except OSError as e:
+        print(f"[web_sim] ERROR: cannot bind port {port}: {e}", flush=True)
+        raise SystemExit(2) from e
+    finally:
+        probe.close()
 
 
 class RobokitTcp:
@@ -75,12 +129,92 @@ class RobokitTcp:
 class SimApp:
     def __init__(self) -> None:
         self.host = "127.0.0.1"
+        self.build_commit = _read_build_commit()
+        self.started_at = time.time()
+        self.process_pid = os.getpid()
         self.state = RobokitMockState()
         patch_mock_state(self.state)
+        self.state.build_commit = self.build_commit
+        self.state.process_pid = self.process_pid
+        self.state.sim_started_at = self.started_at
+        self._snap_lock = threading.Lock()
+        self._snap_full: Optional[Dict[str, Any]] = None
+        self._snap_lite: Optional[Dict[str, Any]] = None
+        self._snap_full_ts = 0.0
+        self._snap_lite_ts = 0.0
+        self._world_meta_ts = 0.0
+        self._world_meta_cache: Dict[str, Any] = {}
+        self._debug_snap_ts = 0.0
+        self._snapshot_stop = threading.Event()
+        self.state._snapshot_cache_refresh = self.refresh_snapshot_cache
         self.world = get_world()
         self.tcp = RobokitTcp(self.host)
         self.goal: Optional[Tuple[float, float]] = None
         self._start_mock()
+        threading.Thread(target=self._snapshot_loop, daemon=True, name="sim_snapshot").start()
+
+    def _refresh_world_meta_cache(self, now: float) -> None:
+        if now - self._world_meta_ts < 1.0 and self._world_meta_cache:
+            return
+        self._world_meta_cache = {
+            "banner": self.world.current_banner(),
+            "scene": self.world.scene_info(),
+            "obstacles": self.world.obstacle_list(),
+            "scenario_movers": self.world.scenario_mover_list(),
+            "actors": self.world.actor_list(),
+            "chronicle": self.world.recent_chronicle(15),
+            "pois": self.world.pois(),
+            "stations": {s["id"]: s for s in self._stations()},
+        }
+        self._world_meta_ts = now
+
+    def _snapshot_loop(self) -> None:
+        """Background snapshot builder — must never run on physics or HTTP threads."""
+        while not self._snapshot_stop.is_set():
+            try:
+                now = time.time()
+                refresh_dbg = getattr(self.state, "_refresh_debug_snapshot", None)
+                if callable(refresh_dbg) and now - self._debug_snap_ts >= 0.50:
+                    refresh_dbg(now)
+                    self._debug_snap_ts = now
+                self.refresh_snapshot_cache()
+            except Exception:
+                pass
+            self._snapshot_stop.wait(0.05)
+
+    def refresh_snapshot_cache(self) -> None:
+        """Build HTTP snapshots off the physics thread."""
+        now = time.time()
+        self._refresh_world_meta_cache(now)
+        with self._snap_lock:
+            if now - self._snap_lite_ts >= 0.20:
+                self._snap_lite = self._build_snapshot(lite=True)
+                self._snap_lite_ts = now
+            if now - self._snap_full_ts >= 1.0:
+                self._snap_full = self._build_snapshot(lite=False)
+                self._snap_full_ts = now
+
+    def get_snapshot(self, *, lite: bool = False) -> Dict[str, Any]:
+        with self._snap_lock:
+            cached = self._snap_lite if lite else (self._snap_full or self._snap_lite)
+        if cached is None:
+            snap = self._build_snapshot(lite=lite)
+        else:
+            snap = dict(cached)
+            snap["updated_at"] = time.time()
+        snap["sim_runtime"] = self._sim_runtime_payload()
+        snap["build_commit"] = self.build_commit
+        return snap
+
+    def snapshot(self, *, lite: bool = False) -> Dict[str, Any]:
+        return self.get_snapshot(lite=lite)
+
+    def _sim_runtime_payload(self) -> Dict[str, Any]:
+        rt = dict(getattr(self.state, "_sim_runtime", {}) or {})
+        rt.setdefault("build_commit", self.build_commit)
+        rt.setdefault("process_pid", self.process_pid)
+        rt.setdefault("started_at", self.started_at)
+        return rt
 
     def _start_mock(self) -> None:
         print("[web_sim] starting mock ports...", flush=True)
@@ -96,17 +230,36 @@ class SimApp:
         self.world.emit("control_lock", "Web 仿真端已抢控制权")
         print("[web_sim] mock ready · scene=", self.world.scene_id, flush=True)
 
-    def snapshot(self) -> Dict[str, Any]:
-        loc = self.tcp.call(PORT_STATUS, 1004, {})
-        spd = self.tcp.call(PORT_STATUS, 1005, {})
-        bat = self.tcp.call(PORT_STATUS, 1007, {})
-        task = self.tcp.call(PORT_STATUS, 1020, {})
-        x = float(loc.get("x", self.state.x))
-        y = float(loc.get("y", self.state.y))
-        yaw = float(loc.get("angle", self.state.angle))
-        live = self.world.lidar_world_points(x, y, yaw, stride=1, step_deg=1.0)
-        banner = self.world.current_banner()
-        scene = self.world.scene_info()
+    def _build_snapshot(self, *, lite: bool = False) -> Dict[str, Any]:
+        if lite:
+            with self.state.lock:
+                x = float(self.state.x)
+                y = float(self.state.y)
+                yaw = float(self.state.angle)
+                spd_vx = float(self.state.vx)
+                spd_w = float(self.state.w)
+                bat_level = float(getattr(self.state, "battery_level", 0.87) or 0.87)
+            loc = {"x": x, "y": y, "angle": yaw, "confidence": 0.95, "current_station": ""}
+            spd = {"vx": spd_vx, "w": spd_w, "is_stop": abs(spd_vx) < 1e-3 and abs(spd_w) < 1e-3}
+            bat = {"battery_level": bat_level, "charging": False}
+            task = {"task_status": int(getattr(self.state, "task_status", 0) or 0), "target_id": ""}
+            live = list(getattr(self.state, "_cached_laser_points", []) or [])
+            meta = self._world_meta_cache or {}
+            banner = meta.get("banner") or self.world.current_banner()
+            scene = meta.get("scene") or self.world.scene_info()
+        else:
+            loc = self.tcp.call(PORT_STATUS, 1004, {})
+            spd = self.tcp.call(PORT_STATUS, 1005, {})
+            bat = self.tcp.call(PORT_STATUS, 1007, {})
+            task = self.tcp.call(PORT_STATUS, 1020, {})
+            x = float(loc.get("x", self.state.x))
+            y = float(loc.get("y", self.state.y))
+            yaw = float(loc.get("angle", self.state.angle))
+            live = self.world.lidar_world_points(x, y, yaw, stride=1, step_deg=1.0)
+            self.state._cached_laser_points = live
+            banner = self.world.current_banner()
+            scene = self.world.scene_info()
+            meta = {}
         with self.state.lock:
             local_raw = list(getattr(self.state, "_path", []) or [])
             planned_raw = list(getattr(self.state, "_planned_path", []) or [])
@@ -158,14 +311,22 @@ class SimApp:
             open_space_forensics = dict(getattr(self.state, "_open_space_forensics", {}) or {})
             local_plan = dict(getattr(self.state, "_local_plan", {}) or {})
             path_rev = int(getattr(self.state, "_global_path_revision", 0) or 0)
+            obstacle_preview = dict(getattr(self.state, "_obstacle_preview", {}) or {})
         navigating = nav_mode in ("tracking", "avoid", "planned", "planner_debug")
-        # 未导航：车周静态点云；导航中：实时雷达点云为主
-        if navigating and nav_mode != "planner_debug":
+        if lite:
+            surround = list(getattr(self.state, "_cached_surround_cloud", []) or live)
+            map_preview = list(getattr(self.state, "_cached_map_cloud", []) or [])
+        elif navigating and nav_mode != "planner_debug":
             surround = live
             map_preview = self.world.map_cloud(max_n=5000)
+            self.state._cached_surround_cloud = surround
+            self.state._cached_map_cloud = map_preview
         else:
-            surround = self.world.local_cloud(x, y, radius=35.0, max_n=7000)
+            surround = self.world.local_cloud(x, y, radius=35.0, max_n=7000 if not lite else 2000)
             map_preview = surround
+            if not lite:
+                self.state._cached_surround_cloud = surround
+                self.state._cached_map_cloud = map_preview
         # 小地图用全局；主视图蓝带默认 executed band（_path）
         global_pts = [{"x": p[0], "y": p[1]} for p in (global_raw or local_raw)]
         raw_pts = [{"x": p[0], "y": p[1]} for p in raw_global] if raw_global else []
@@ -225,10 +386,10 @@ class SimApp:
                 "surround_cloud": surround,
                 "mode": "live_lidar" if navigating else "panorama_map",
             },
-            "obstacles": self.world.obstacle_list(),
-            "scenario_movers": self.world.scenario_mover_list(),
-            "actors": self.world.actor_list(),
-            "chronicle": self.world.recent_chronicle(15),
+            "obstacles": meta.get("obstacles") if lite and meta else self.world.obstacle_list(),
+            "scenario_movers": meta.get("scenario_movers") if lite and meta else self.world.scenario_mover_list(),
+            "actors": meta.get("actors") if lite and meta else self.world.actor_list(),
+            "chronicle": meta.get("chronicle") if lite and meta else self.world.recent_chronicle(15),
             "banner": banner,
             "nav": {
                 "mode": nav_mode,
@@ -334,8 +495,8 @@ class SimApp:
                 "footprint_clearance_m": footprint_clearance_m,
                 "predicted_min_clearance_m": predicted_min_clearance_m,
             },
-            "stations": {s["id"]: s for s in self._stations()},
-            "pois": self.world.pois(),
+            "stations": meta.get("stations") if lite and meta.get("stations") else {s["id"]: s for s in self._stations()},
+            "pois": meta.get("pois") if lite and meta.get("pois") is not None else self.world.pois(),
             "map": {
                 "cloud": map_preview,
                 "stations": self._stations(),
@@ -348,6 +509,7 @@ class SimApp:
             "vision": {},
             "devices": {},
             "route_task": {},
+            "obstacle_preview": obstacle_preview,
         }
 
     def _stations(self) -> list:
@@ -636,7 +798,8 @@ def make_handler(www: Path):
                 self.path = "/sim_main.html"
                 return super().do_GET()
             if path in ("/api/state", "/api/heartbeat"):
-                snap = APP.snapshot()
+                lite = qs.get("lite", ["0"])[0].lower() in ("1", "true", "yes")
+                snap = APP.get_snapshot(lite=lite)
                 if path == "/api/heartbeat":
                     self._json(
                         200,
@@ -715,6 +878,20 @@ def make_handler(www: Path):
                     self._json(200, APP.state.get_obstacle_preview())
                 else:
                     self._json(404, {"success": False, "error": "obstacle preview unavailable"})
+                return
+            if path in ("/api/nav/runtime", "/api/sim/runtime"):
+                snap = APP.get_snapshot(lite=True)
+                self._json(
+                    200,
+                    {
+                        "success": True,
+                        "sim_runtime": snap.get("sim_runtime") or {},
+                        "build_commit": snap.get("build_commit"),
+                        "agv": {"x": (snap.get("agv") or {}).get("x"), "y": (snap.get("agv") or {}).get("y")},
+                        "nav_mode": (snap.get("nav") or {}).get("mode"),
+                        "generated_at": time.time(),
+                    },
+                )
                 return
             if path in ("/api/nav/safety",):
                 try:
@@ -1004,13 +1181,15 @@ def main() -> int:
     if not WWW.exists():
         print(f"WWW missing: {WWW}")
         return 1
+    _ensure_single_sim_instance(WEB_SIM_PORT)
     APP = SimApp()
     handler = make_handler(WWW)
-    srv = ThreadingHTTPServer(("0.0.0.0", 19999), handler)
+    srv = ThreadingHTTPServer(("0.0.0.0", WEB_SIM_PORT), handler)
     sc = APP.world.scene_info()
     print("=" * 60, flush=True)
     print(" AGV V0.1 TRUE SCENE Simulation READY", flush=True)
     print("  Web:     http://127.0.0.1:19999/", flush=True)
+    print(f"  Build:   {APP.build_commit}  pid={APP.process_pid}", flush=True)
     print("  Engine:  smap occupancy + dual lidar + Three.js", flush=True)
     print(f"  Scene:   {sc['kind']} · {sc['name']} · cloud={sc['cloud_count']}", flush=True)
     print("  Control: API 3055/3056 · lidar 1009", flush=True)

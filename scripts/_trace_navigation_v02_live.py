@@ -68,14 +68,10 @@ def _dig(d: dict, *keys, default=None):
 
 
 def _sample_v02(client: NavLiveClient, seq: int, scene: str, setup_meta: dict) -> dict:
-    # Light sample: state + obstacle-preview only. Extra debug/diagnostics HTTP
-    # starves the single-process physics loop (dt=0.05 applied per overrun tick).
-    st = client.get("/api/state")
-    op = {}
-    try:
-        op = client.get("/api/nav/obstacle-preview")
-    except Exception:
-        pass
+    # Single lite snapshot — physics thread owns heavy work; HTTP is read-only.
+    st = client.get("/api/state?lite=1")
+    op = st.get("obstacle_preview") if isinstance(st.get("obstacle_preview"), dict) else {}
+    sim_rt = st.get("sim_runtime") if isinstance(st.get("sim_runtime"), dict) else {}
     dbg = st.get("debug") if isinstance(st.get("debug"), dict) else {}
     if not dbg:
         dbg = {}
@@ -171,6 +167,11 @@ def _sample_v02(client: NavLiveClient, seq: int, scene: str, setup_meta: dict) -
         "heading": agv.get("angle"),
         "obstacles": st.get("obstacles"),
         "scenario_movers": st.get("scenario_movers"),
+        "build_commit": st.get("build_commit") or sim_rt.get("build_commit"),
+        "physics_hz": sim_rt.get("physics_hz"),
+        "physics_dt_ms": sim_rt.get("physics_dt_ms"),
+        "physics_overrun_count": sim_rt.get("physics_overrun_count"),
+        "sim_runtime": sim_rt,
     }
     return row
 
@@ -260,7 +261,7 @@ def run_scene(
         tick_start = time.time()
         elapsed = tick_start - t0
         if (not injected) and spec.inject_fn and elapsed >= spec.inject_delay_s:
-            pose = client.get("/api/state").get("agv") or {}
+            pose = client.get("/api/state?lite=1").get("agv") or {}
             px, py = float(pose.get("x") or 0), float(pose.get("y") or 0)
             yaw = float(pose.get("angle") or 0)
             _sync_world_scene(world, spec.map_scene)
