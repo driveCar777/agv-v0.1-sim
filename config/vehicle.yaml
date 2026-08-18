@@ -30,4 +30,14 @@ vehicle_model:
       max_decel_mps2: CALIBRATION_REQUIRED
       max_omega_rad_s: ENGINEERING_ASSUMPTION
       max_alpha_rad_s2: ENGINEERING_ASSUMPTION
-  calibration_status: PARTIAL
+  motion:
+    max_lateral_accel_mps2: 0.18
+    max_longitudinal_jerk_mps3: null
+    max_angular_jerk_rps3: null
+    source:
+      max_lateral_accel_mps2: DERIVED  # max_vx_mps * max_omega_rad_s
+      max_longitudinal_jerk_mps3: CALIBRATION_REQUIRED
+      max_angular_jerk_rps3: CALIBRATION_REQUIRED
+    note: >
+      Jerk is not a field measurement. DynamicsLimiter skips jerk clamps while
+      these are null. Do not treat sim accel/alpha as real-AGV certified.
