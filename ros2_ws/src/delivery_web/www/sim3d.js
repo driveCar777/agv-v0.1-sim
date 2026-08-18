@@ -754,7 +754,7 @@
         if (op.right_corridor_poses?.length >= 2) {
           this._addPolyline(op.right_corridor_poses.map((p) => [p.x, p.y]), 0x22d3ee, 0.08);
         }
-        if op.first_collision_distance_m != null && op.collision_pose) {
+        if (op.first_collision_distance_m != null && op.collision_pose) {
           const cp = op.collision_pose;
           this._addDisk(cp.x, cp.y, 0.10, 0xea580c, 0.85);
         }
