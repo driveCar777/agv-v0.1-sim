@@ -656,6 +656,31 @@
           ]);
         });
       },
+      dbg_side_chain(card) {
+        const body = card.querySelector(".widget-body");
+        throttleSnap(card, 200, (snap) => {
+          const op = snap.debug?.obstacle_preview || {};
+          const nav = snap.nav || {};
+          const ec = snap.debug?.nav_policy?.execution_corridor || op.execution_corridor || nav.execution_corridor || {};
+          const probe = op.probe_side || op.side_probe?.preferred_side || "—";
+          const commit = op.commit_side || op.committed_side || snap.debug?.avoidance_phase?.committed_side || "—";
+          const execSide = op.execution_side || ec.committed_side || ec.mode || "—";
+          const inc = op.side_inconsistency || "";
+          const w = nav.mppi_w ?? snap.debug?.velocity_chain?.requested_omega;
+          const omegaSign = w == null ? "—" : (w > 0.02 ? "LEFT (+ω)" : w < -0.02 ? "RIGHT (-ω)" : "STRAIGHT");
+          body.innerHTML = kv([
+            ["PROBE", probe],
+            ["COMMIT", commit],
+            ["EXECUTION", execSide],
+            ["corridor.active", ec.active != null ? String(ec.active) : "—"],
+            ["corridor.mode", ec.mode || "—"],
+            ["inconsistency", inc || "—"],
+            ["ω sign", omegaSign],
+            ["L/R conf", `${fmt(op.probe_confidence_left ?? op.side_probe?.left_confidence, 2)} / ${fmt(op.probe_confidence_right ?? op.side_probe?.right_confidence, 2)}`],
+            ["L/R valid", `${op.left_valid ?? op.side_probe?.left_valid ?? "—"} / ${op.right_valid ?? op.side_probe?.right_valid ?? "—"}`],
+          ]);
+        });
+      },
       dbg_phase4_probe(card) {
         const body = card.querySelector(".widget-body");
         throttleSnap(card, 250, (snap) => {
@@ -1192,6 +1217,17 @@
           y: 700,
           group: "POLICY",
           init: inits.dbg_nav_policy,
+        },
+        dbg_side_chain: {
+          title: "SIDE PROBE / COMMIT / EXEC",
+          w: 300,
+          h: 220,
+          minW: 220,
+          minH: 160,
+          x: 12,
+          y: 1260,
+          group: "SAFETY",
+          init: inits.dbg_side_chain,
         },
         dbg_phase4_probe: {
           title: "NAV PROBE",

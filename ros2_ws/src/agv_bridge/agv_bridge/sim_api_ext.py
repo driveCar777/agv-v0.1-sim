@@ -957,9 +957,34 @@ def patch_mock_state(state) -> None:
                     op["probe_active"] = sp_obj.probe_active
                     op["probe_confidence_left"] = sp_obj.left_confidence
                     op["probe_confidence_right"] = sp_obj.right_confidence
+                    op["probe_side"] = sp_obj.preferred_side
+                    op["left_valid"] = sp_obj.left_valid
+                    op["right_valid"] = sp_obj.right_valid
+                    op["commit_ready"] = sp_obj.commit_ready
                     op["committed_side"] = sp_obj.committed_side_hint or sp_obj.preferred_side
                 if av_obj is not None and hasattr(av_obj, "to_dict"):
                     op.update(av_obj.to_dict())
+                    op["commit_side"] = av_obj.committed_side
+                ec_obj = getattr(local_mppi, "last_execution_corridor", None)
+                if ec_obj is not None and hasattr(ec_obj, "to_dict"):
+                    op["execution_corridor"] = ec_obj.to_dict()
+                    ex_side = ec_obj.committed_side or (
+                        ec_obj.mode if ec_obj.mode in ("LEFT", "RIGHT") else None
+                    )
+                    op["execution_side"] = ex_side
+                probe_side = op.get("probe_side")
+                if not probe_side and isinstance(op.get("side_probe"), dict):
+                    probe_side = op["side_probe"].get("preferred_side")
+                commit_side = op.get("commit_side") or op.get("committed_side")
+                exec_side = op.get("execution_side")
+                if (
+                    probe_side in ("LEFT", "RIGHT")
+                    and commit_side in ("LEFT", "RIGHT")
+                    and probe_side != commit_side
+                ):
+                    op["side_inconsistency"] = "SIDE_DECISION_INCONSISTENCY"
+                elif probe_side in ("LEFT", "RIGHT") and exec_side in ("LEFT", "RIGHT") and probe_side != exec_side:
+                    op["side_inconsistency"] = "EXECUTION_SIDE_MISMATCH"
                 if dr_obj is not None and hasattr(dr_obj, "to_dict"):
                     op["dynamic_resume"] = dr_obj.to_dict()
                     op["dynamic_state"] = dr_obj.dynamic_state
@@ -1413,6 +1438,16 @@ def patch_mock_state(state) -> None:
                 dbg = state._debug_snapshot if isinstance(state._debug_snapshot, dict) else {}
                 lp = dict(getattr(state, "_local_plan", {}) or {})
         op = blob or (dbg.get("obstacle_preview") if isinstance(dbg.get("obstacle_preview"), dict) else {})
+        sp = op.get("side_probe") if isinstance(op.get("side_probe"), dict) else {}
+        ec = op.get("execution_corridor") if isinstance(op.get("execution_corridor"), dict) else {}
+        nav_pol = dbg.get("nav_policy") if isinstance(dbg.get("nav_policy"), dict) else {}
+        if not ec and isinstance(nav_pol.get("execution_corridor"), dict):
+            ec = nav_pol["execution_corridor"]
+        probe_side = op.get("probe_side") or op.get("preferred_side") or sp.get("preferred_side")
+        commit_side = op.get("commit_side") or op.get("committed_side")
+        exec_side = op.get("execution_side") or ec.get("committed_side") or (
+            ec.get("mode") if str(ec.get("mode") or "").upper() in ("LEFT", "RIGHT") else None
+        )
         return {
             "success": True,
             "future_preview_m": op.get("future_preview_m") or op.get("preview_distance_m"),
@@ -1435,7 +1470,16 @@ def patch_mock_state(state) -> None:
                 float(op.get("probe_confidence_left") or 0.0),
                 float(op.get("probe_confidence_right") or 0.0),
             ),
-            "committed_side": op.get("committed_side"),
+            "probe_confidence_left": op.get("probe_confidence_left") or sp.get("left_confidence"),
+            "probe_confidence_right": op.get("probe_confidence_right") or sp.get("right_confidence"),
+            "preferred_side": probe_side,
+            "probe_side": probe_side,
+            "commit_side": commit_side,
+            "execution_side": exec_side,
+            "commit_ready": op.get("commit_ready") if op.get("commit_ready") is not None else sp.get("commit_ready"),
+            "side_inconsistency": op.get("side_inconsistency"),
+            "execution_corridor": ec or op.get("execution_corridor"),
+            "committed_side": commit_side,
             "global_reconnect_blocked": op.get("global_reconnect_blocked"),
             "dynamic_state": op.get("dynamic_state"),
             "resume_block_reason": op.get("resume_block_reason"),
