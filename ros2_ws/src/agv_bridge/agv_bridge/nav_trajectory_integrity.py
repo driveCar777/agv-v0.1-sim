@@ -24,6 +24,27 @@ FRAME_MAP = "map"
 REVERSE_ARC_IMPLEMENTED = False
 PLANNER_PERIOD_S = 0.20
 CONTROL_LATENCY_S = 0.10
+LOCAL_PLANNER_STALE_MS = 5000.0  # moving + age above → LOCAL_PLANNER_STALE
+
+
+def max_trajectory_age_ms(
+    *,
+    planner_period_s: float = PLANNER_PERIOD_S,
+    actual_planner_compute_s: Optional[float] = None,
+    planner_start_timestamp: Optional[float] = None,
+    planner_finish_timestamp: Optional[float] = None,
+    control_latency_s: float = CONTROL_LATENCY_S,
+) -> float:
+    """Freshness gate derived from measured planner compute + period + control latency."""
+    compute_s = actual_planner_compute_s
+    if compute_s is None and planner_start_timestamp and planner_finish_timestamp:
+        pst, pft = float(planner_start_timestamp), float(planner_finish_timestamp)
+        if pft > pst:
+            compute_s = pft - pst
+    if compute_s is not None and compute_s > 0:
+        # Valid until next planner period completes + control delivery slack.
+        return (float(compute_s) + float(planner_period_s) + float(control_latency_s)) * 1000.0
+    return (float(planner_period_s) + 0.35) * 1000.0
 
 _FUTURE_SOURCES = {"FORWARD", "LEFT", "RIGHT", "FORWARD_FUTURE"}
 _BACKWARD_SOURCES = {"BACKWARD", "REVERSE", "BACKWARD_FUTURE"}
@@ -225,6 +246,7 @@ def enrich_trajectory_metadata(
     vehicle: Dict[str, Any],
     now: Optional[float] = None,
     planner_period_s: float = PLANNER_PERIOD_S,
+    actual_planner_compute_s: Optional[float] = None,
     current_scene_id: Optional[Any] = None,
     current_cycle_id: Optional[Any] = None,
 ) -> Dict[str, Any]:
@@ -265,8 +287,22 @@ def enrich_trajectory_metadata(
     ae_raw = anchor_error_m(vehicle, out)
     max_shift = max_reanchor_shift_m(vehicle_speed_mps=spd, planner_period_s=planner_period_s)
     age = trajectory_age_ms(out, tnow) if generated is not None else None
-    max_age_ms = (planner_period_s + 0.35) * 1000.0
+    compute_s = actual_planner_compute_s
+    if compute_s is None:
+        pst = out.get("planner_start_timestamp")
+        pft = out.get("planner_finish_timestamp")
+        if pst and pft and float(pft) > float(pst):
+            compute_s = float(pft) - float(pst)
+    max_age_ms = max_trajectory_age_ms(
+        planner_period_s=planner_period_s,
+        actual_planner_compute_s=compute_s,
+        planner_start_timestamp=out.get("planner_start_timestamp"),
+        planner_finish_timestamp=out.get("planner_finish_timestamp"),
+    )
     stale_reasons: List[str] = []
+    if age is not None and age > LOCAL_PLANNER_STALE_MS:
+        stale_reasons.append("PLANNER_REALTIME")
+        out["local_planner_stale"] = True
     if kind in (TRAJ_KIND_HISTORICAL_RETREAT, TRAJ_KIND_BACKWARD_FUTURE, TRAJ_KIND_NONE):
         eligible = False
         viz_only = True
@@ -353,6 +389,9 @@ def enrich_trajectory_metadata(
         "max_anchor_yaw_deg": round(
             max_anchor_yaw_deg(vehicle_omega_rad_s=omega, planner_period_s=planner_period_s), 2
         ),
+        "max_age_ms": round(max_age_ms, 1),
+        "planner_compute_ms": None if compute_s is None else round(float(compute_s) * 1000.0, 1),
+        "local_planner_stale": bool(out.get("local_planner_stale")),
         "stale": bool(stale_reasons),
         "stale_reasons": stale_reasons,
         "stale_reanchor_applied": False,
