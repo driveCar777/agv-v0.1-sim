@@ -878,6 +878,14 @@ class LocalMppiModel:
             except Exception:
                 gprev = 5.0
         goal_d = math.hypot(goal[0] - x, goal[1] - y) if goal else None
+        future_k = 0.0
+        try:
+            from agv_bridge.nav_motion_dynamics import preview_max_abs_kappa
+
+            gp_xy = [(float(p[0]), float(p[1])) for p in (global_path or []) if isinstance(p, (list, tuple)) and len(p) >= 2]
+            future_k, _ = preview_max_abs_kappa(gp_xy, x, y)
+        except Exception:
+            future_k = 0.0
         spd = self.speed_policy.compute(
             scene=str(getattr(pol, "scene", None) or "OPEN"),
             policy_state=str(getattr(pol, "state", None) or ""),
@@ -895,6 +903,7 @@ class LocalMppiModel:
             avoidance_phase=str(av.phase) if av is not None else "OPEN",
             probe_active=bool(sp.probe_active) if sp else False,
             commit_ready=bool(sp.commit_ready) if sp else False,
+            future_max_abs_kappa=float(future_k),
             dynamic_resume_vx=(
                 self.last_dynamic_state.resume_target_vx
                 if self.last_dynamic_state is not None and self.last_dynamic_state.resume_allowed

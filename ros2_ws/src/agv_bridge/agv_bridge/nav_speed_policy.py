@@ -112,6 +112,7 @@ class SpeedPolicy:
         avoidance_phase: str = "OPEN",
         probe_active: bool = False,
         commit_ready: bool = False,
+        future_max_abs_kappa: float = 0.0,
         dynamic_resume_vx: Optional[float] = None,
     ) -> SpeedPolicyResult:
         g = self.geom or DEFAULT_GEOM
@@ -207,9 +208,10 @@ class SpeedPolicy:
             limits.append(LIMIT_GOAL)
             reason = "GOAL_NEAR"
 
-        # Curvature → v <= w_max / |κ|
-        if abs(float(abs_kappa)) > 1e-4:
-            v_k = float(min(W_MAX_CONTROL, g.max_w)) / max(abs(float(abs_kappa)), 1e-4)
+        # Curvature → v <= w_max / |κ|  (current + future preview)
+        kappa_use = max(abs(float(abs_kappa)), abs(float(future_max_abs_kappa)))
+        if kappa_use > 1e-4:
+            v_k = float(min(W_MAX_CONTROL, g.max_w)) / max(kappa_use, 1e-4)
             if v_k + 1e-6 < target:
                 target = min(target, v_k)
                 limits.append(LIMIT_CURVATURE)
@@ -244,7 +246,7 @@ class SpeedPolicy:
             scene=sc,
             policy_state=pst,
             vx_scale=scale,
-            abs_kappa=float(abs_kappa),
+            abs_kappa=float(kappa_use),
             front_near=float(front_near),
             min_clearance=clr,
         )
