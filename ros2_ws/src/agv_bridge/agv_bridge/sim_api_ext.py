@@ -94,6 +94,20 @@ def patch_mock_state(state) -> None:
     state._physical_corridor: Dict[str, Any] = {}
     state._retreat_trajectory: Dict[str, Any] = {}
     state._command_ownership: Dict[str, Any] = {}
+    state._motion: Dict[str, Any] = {}
+    from agv_bridge.nav_dynamics_limiter import DynamicsLimiter
+    from agv_bridge.nav_motion_dynamics import OscillationDetector, OvershootDetector
+
+    state._dyn_limiter = DynamicsLimiter()
+    state._osc_det = OscillationDetector()
+    state._over_det = OvershootDetector()
+    state._motion_prev_vx = None
+    state._motion_prev_w = None
+    state._motion_prev_ax = None
+    state._motion_prev_alpha = None
+    state._motion_prev_xy = None
+    state._limited_vx = 0.0
+    state._limited_w = 0.0
     state._nav_policy: Dict[str, Any] = {}
     state._nav_scene_id = 1
     state._nav_scene_revision = 1
@@ -233,6 +247,14 @@ def patch_mock_state(state) -> None:
         state._planner_input_timestamp = 0.0
         state._planner_start_timestamp = 0.0
         state._planner_finish_timestamp = 0.0
+        state._command_ownership = {}
+        state._motion = {}
+        try:
+            state._dyn_limiter.reset()
+            state._osc_det.reset()
+            state._over_det.reset()
+        except Exception:
+            pass
         debug_hub.reset_session()
 
     def _clear_progress_and_recovery() -> None:
@@ -1959,7 +1981,39 @@ def patch_mock_state(state) -> None:
                     mppi_vx = mppi_w = 0.0
 
             # Safety
-            cmd_before_vx, cmd_before_w = mppi_vx, mppi_w
+            req_vx, req_w = float(mppi_vx), float(mppi_w)
+            limited_vx, limited_w = req_vx, req_w
+            limited_blob: Dict[str, Any] = {}
+            try:
+                mm_lim = ""
+                try:
+                    mm_lim = str(getattr(local_mppi.maneuver, "mode", "") or "")
+                except Exception:
+                    mm_lim = ""
+                pol_v = None
+                try:
+                    if getattr(local_mppi, "last_speed", None) is not None:
+                        pol_v = float(local_mppi.last_speed.target_vx)
+                except Exception:
+                    pol_v = None
+                limited = state._dyn_limiter.limit(
+                    req_vx,
+                    req_w,
+                    dt=float(sim_dt),
+                    state_vx=float(getattr(state, "vx", 0.0) or 0.0),
+                    state_omega=float(getattr(state, "w", 0.0) or 0.0),
+                    path=list(gpath or []),
+                    x=float(x),
+                    y=float(y),
+                    emergency=emergency,
+                    maneuver_mode=mm_lim,
+                    policy_speed=pol_v,
+                )
+                limited_vx, limited_w = float(limited.vx), float(limited.omega)
+                limited_blob = limited.to_dict()
+            except Exception:
+                limited_vx, limited_w = req_vx, req_w
+            cmd_before_vx, cmd_before_w = limited_vx, limited_w
             mppi_failure_reason = None
             fp_clearance_now = None
             predicted_min_clr = None
@@ -1978,8 +2032,8 @@ def patch_mock_state(state) -> None:
                 fp_clearance_now = None
             planner_state = str(getattr(local_mppi, "planner_state", "NORMAL") or "NORMAL")
             safe_vx, safe_w, safety_reason, safe_vx_reason = apply_safety(
-                mppi_vx,
-                mppi_w,
+                limited_vx,
+                limited_w,
                 front_near=front_near,
                 rear_near=rear_near,
                 footprint_clearance=fp_clearance_now,
@@ -2036,6 +2090,86 @@ def patch_mock_state(state) -> None:
                     state._cmd_source = str(own.get("command_source") or "")
             except Exception:
                 own = {}
+
+            try:
+                from agv_bridge.nav_motion_dynamics import (
+                    classify_motion_health,
+                    derive_rates,
+                    limit_cycle_suspected,
+                )
+
+                osc = state._osc_det.update(now, float(safe_w), cross_track=float(getattr(state, "_path_lateral_m", 0.0) or 0.0))
+                over = state._over_det.update(float(getattr(state, "_path_heading_err", 0.0) or 0.0))
+                prev_xy = getattr(state, "_motion_prev_xy", None)
+                prog = 0.0
+                if isinstance(prev_xy, tuple):
+                    prog = math.hypot(float(x) - prev_xy[0], float(y) - prev_xy[1])
+                lcyc = limit_cycle_suspected(progress_m=prog, omega_sign_changes=int(osc.get("omega_sign_changes") or 0))
+                rates = derive_rates(
+                    vx=float(getattr(state, "vx", 0.0) or 0.0),
+                    omega=float(getattr(state, "w", 0.0) or 0.0),
+                    prev_vx=getattr(state, "_motion_prev_vx", None),
+                    prev_omega=getattr(state, "_motion_prev_w", None),
+                    prev_ax=getattr(state, "_motion_prev_ax", None),
+                    prev_alpha=getattr(state, "_motion_prev_alpha", None),
+                    dt=float(sim_dt),
+                )
+                stale_plan = False
+                try:
+                    ptm = getattr(local_mppi, "last_physical_trajectory", None)
+                    if isinstance(ptm, dict) and ptm.get("control_eligible") is False:
+                        stale_plan = True
+                except Exception:
+                    stale_plan = False
+                health = classify_motion_health(
+                    emergency=emergency,
+                    safe_stop=planner_state in ("SAFE_STOP", "NAVIGATION_FAILED"),
+                    chatter=bool(osc.get("control_chatter")) or lcyc,
+                    overshoot=bool(over.get("heading_overshoot")),
+                    stale_planner=stale_plan,
+                    jerk_limited=bool(limited_blob.get("jerk_limited")),
+                    accel_limited=bool(limited_blob.get("accel_limited")),
+                    curvature_limited=bool(limited_blob.get("curvature_limited")),
+                    oscillating=bool(osc.get("control_chatter")) or lcyc,
+                )
+                motion = {
+                    "health": health,
+                    "requested_vx": round(req_vx, 4),
+                    "requested_omega": round(req_w, 4),
+                    "limited_vx": round(limited_vx, 4),
+                    "limited_omega": round(limited_w, 4),
+                    "approved_vx": round(float(safe_vx), 4),
+                    "approved_omega": round(float(safe_w), 4),
+                    "actual_vx": round(float(getattr(state, "vx", 0.0) or 0.0), 4),
+                    "actual_omega": round(float(getattr(state, "w", 0.0) or 0.0), 4),
+                    "limiter": limited_blob,
+                    "oscillation": osc,
+                    "overshoot": over,
+                    "limit_cycle_suspected": lcyc,
+                    "rates": {
+                        "ax": rates.get("ax"),
+                        "alpha": rates.get("alpha"),
+                        "curvature": rates.get("curvature"),
+                        "lateral_acceleration": rates.get("lateral_acceleration"),
+                        "longitudinal_jerk": rates.get("longitudinal_jerk"),
+                        "angular_jerk": rates.get("angular_jerk"),
+                        "quality": rates.get("quality"),
+                    },
+                    "speed_limit_reason": limited_blob.get("speed_limit_reason") or "NORMAL",
+                    "future_max_abs_kappa": limited_blob.get("future_max_abs_kappa"),
+                    "curve_vmax": limited_blob.get("curve_vmax"),
+                }
+                state._motion_prev_vx = rates.get("vx")
+                state._motion_prev_w = rates.get("omega")
+                state._motion_prev_ax = rates.get("ax")
+                state._motion_prev_alpha = rates.get("alpha")
+                state._motion_prev_xy = (float(x), float(y))
+                with state.lock:
+                    state._motion = motion
+                    state._limited_vx = limited_vx
+                    state._limited_w = limited_w
+            except Exception:
+                pass
 
             with state.lock:
                 state._last_safety_zero = abs(safe_vx) < 1e-4 and abs(safe_w) < 1e-4
