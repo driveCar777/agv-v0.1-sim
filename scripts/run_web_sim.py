@@ -330,6 +330,7 @@ class SimApp:
             obstacle_preview = dict(getattr(self.state, "_obstacle_preview", {}) or {})
             command_own = dict(getattr(self.state, "_command_ownership", {}) or {})
             motion = dict(getattr(self.state, "_motion", {}) or {})
+            planner_diag = dict(getattr(self.state, "_planner_diag", {}) or {})
         navigating = nav_mode in ("tracking", "avoid", "planned", "planner_debug")
         if lite:
             surround = list(getattr(self.state, "_cached_surround_cloud", []) or live)
@@ -536,6 +537,7 @@ class SimApp:
                 "path_heading_error": round(path_heading, 4),
                 "blue_band_means": "FORWARD_FUTURE control-eligible only; historical/backward are retreat_trajectory",
                 "physical_trajectory": physical_for_nav,
+                "trajectory_ineligible_reason": (pt_enriched or {}).get("trajectory_ineligible_reason"),
                 "retreat_trajectory": retreat_for_nav,
                 "historical_retreat": retreat_for_nav if (retreat_for_nav or {}).get("trajectory_kind") == "HISTORICAL_RETREAT" else None,
                 "nav_scene_id": nav_scene_id,
@@ -545,6 +547,16 @@ class SimApp:
                 "planner_input_timestamp": planner_input_ts or None,
                 "planner_start_timestamp": planner_start_ts or None,
                 "planner_finish_timestamp": planner_finish_ts or None,
+                "planner_diag": planner_diag,
+                "planner_compute_ms": planner_diag.get("planner_compute_ms"),
+                "planner_compute_p50": planner_diag.get("planner_compute_p50"),
+                "planner_compute_p95": planner_diag.get("planner_compute_p95"),
+                "planner_compute_max": planner_diag.get("planner_compute_max"),
+                "planner_inflight": planner_diag.get("planner_inflight"),
+                "planner_timeout_count": planner_diag.get("planner_timeout_count"),
+                "planner_drop_count": planner_diag.get("planner_drop_count"),
+                "planner_late_completion_count": planner_diag.get("planner_late_completion_count"),
+                "planner_apply_drop_count": planner_diag.get("planner_apply_drop_count"),
                 "command_source": command_own.get("command_source") or "OTHER",
                 "command_source_module": command_own.get("command_source_module"),
                 "command_source_reason": command_own.get("command_source_reason") or command_own.get("command_reason"),

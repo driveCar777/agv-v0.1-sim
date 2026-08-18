@@ -315,6 +315,7 @@
       <div><b>Turn</b> <span id="motTurnReady">—</span></div>
       <div><b>Obstacle</b> <span id="motObsDist">—</span></div>
       <div><b>Planner age</b> <span id="motPlanAge">—</span></div>
+      <div><b>Planner ms</b> <span id="motPlanMs">—</span></div>
       <div><b>Control</b> <span id="motControl">—</span></div>
     </div>
   </div>
@@ -517,10 +518,11 @@
       const obsD = turn.obstacle_distance_m ?? nav.safety_envelope?.front_near ?? snap.front_near;
       const planAge = turn.planner_age_ms;
       const planAgeTxt = planAge == null ? "—" : (planAge > 5000 ? `STALE ${(planAge/1000).toFixed(1)}s` : `${(planAge/1000).toFixed(2)}s`);
-      const elig = nav.local_plan_status || (nav.physical_trajectory?.control_eligible === false ? "STALE" : (nav.physical_trajectory?.control_eligible ? "VALID" : "—"));
+      const elig = nav.physical_trajectory?.control_eligible === true ? "VALID" : (nav.trajectory_ineligible_reason || nav.local_plan_status || "—");
       document.getElementById("motTurnReady").textContent = `${tr} / ${turn.turn_feasibility || "—"}`;
       document.getElementById("motObsDist").textContent = obsD == null ? "—" : `${Number(obsD).toFixed(2)}m · turn d=${turn.turn_required_distance_m == null ? "—" : Number(turn.turn_required_distance_m).toFixed(2)}m`;
       document.getElementById("motPlanAge").textContent = planAgeTxt;
+      document.getElementById("motPlanMs").textContent = nav.planner_compute_ms == null ? "—" : `${Number(nav.planner_compute_ms).toFixed(1)}ms p95=${nav.planner_compute_p95 == null ? "—" : Number(nav.planner_compute_p95).toFixed(1)}`;
       document.getElementById("motControl").textContent = `${elig} · ${nav.command_source || own.command_source || "—"}`;
       motEl.classList.toggle("mismatch", ["OSCILLATING", "OVERSHOOT", "STALE_PLANNER", "DYNAMICS_INFEASIBLE", "SAFE_STOP"].includes(h) || tr === "LATE" || tr === "INFEASIBLE");
     }

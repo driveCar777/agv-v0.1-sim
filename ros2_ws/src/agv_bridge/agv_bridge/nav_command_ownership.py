@@ -122,13 +122,14 @@ def classify_command_source(
     elif tracking_local_plan or follow == "LOCAL_PLAN":
         source, module, reason = SRC_LOCAL_MPPI, MODULE_MPPI, "PP_PLUS_MPPI_ON_LOCAL_PLAN"
         if physical_control_eligible is False or local_plan_kinematic_valid is False:
-            fallback = "STALE_TRAJECTORY_STILL_TRACKED"
-            reason = "PP_ON_LOCAL_PLAN|PUBLISHED_TRAJECTORY_STALE"
+            source, module = SRC_FALLBACK, MODULE_SAFETY
+            fallback = "LOCAL_PLAN_CONTROL_LOST"
+            reason = "LOCAL_PLAN_INELIGIBLE|CONTROL_AUTHORITY_REMOVED"
     elif follow in ("GLOBAL_PATH", "GLOBAL", ""):
         source, module, reason = SRC_GLOBAL_PATH_TRACKER, MODULE_MPPI, "PP_ON_GLOBAL_PATH"
         if local_plan_kinematic_valid is False or physical_control_eligible is False:
-            fallback = "STALE_LOCAL_TO_GLOBAL_TRACK"
-            reason = "LOCAL_PLAN_NOT_TRACKING|PP_ON_GLOBAL_PATH"
+            fallback = "SAFE_GLOBAL_TRACK"
+            reason = "LOCAL_PLAN_INELIGIBLE|SAFE_GLOBAL_TRACK"
         else:
             fallback = "GLOBAL_TRACK"
             reason = "AUTH_OR_NO_LOCAL_PLAN|PP_ON_GLOBAL_PATH"

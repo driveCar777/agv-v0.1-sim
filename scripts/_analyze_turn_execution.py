@@ -61,6 +61,7 @@ def analyze(path: Path) -> Dict[str, Any]:
     t0 = _first_ts(events, lambda r: r.get("event") == "ONLINE_OBSTACLE_INJECT")
     t0 = t0 or _first_ts(samples, lambda r: float(r.get("front_near") or 99) < 5.0)
     t0_ts = t0["ts"] if t0 else samples[0]["ts"]
+    t0_sample = _first_ts(samples, lambda r: float(r.get("ts") or 0) >= float(t0_ts))
 
     def _at(key: str) -> Optional[Dict[str, Any]]:
         idx = _turn_start_index(samples, key)
@@ -109,18 +110,35 @@ def analyze(path: Path) -> Dict[str, Any]:
         "T_approved_turn": None if not t_app else t_app["ts"],
         "T_actual_turn": None if not t_act else t_act["ts"],
         "T_safe_stop": None if not t_safe else t_safe["ts"],
-        "distance_at_detect": float(t0.get("front_near") or 0) if t0 else None,
+        "distance_at_detect": float(t0_sample.get("front_near") or 0) if t0_sample else None,
+        "obstacle_detect_distance": float(t0_sample.get("front_near") or 0) if t0_sample else None,
+        "turn_decision_distance": None if not t_plan else t_plan.get("front_near"),
+        "turn_command_distance": None if not t_req else t_req.get("front_near"),
         "distance_at_actual_turn": obs_at_turn,
+        "actual_turn_start_distance": obs_at_turn,
+        "safe_stop_distance": None if not t_safe else t_safe.get("front_near"),
         "planner_to_actual_ms": planner_to_actual,
         "distance_during_planner_to_actual_m": dist_latency,
+        "vehicle_forward_distance_after_detection": dist_latency,
+        "vehicle_forward_distance_before_turn": dist_latency,
+        "remaining_clearance": obs_at_turn,
         "turn_required_distance_m": req_d,
         "turn_margin_m": margin,
+        "formal_late_turn_margin": {
+            "value_m": margin,
+            "status": "INCOMPLETE",
+            "note": "omega ramp only; not a safety proof",
+        },
         "late_turn": late,
         "planner_age_max_ms": max(ages) if ages else None,
         "planner_compute_p50_ms": statistics.median(compute) if compute else None,
         "planner_compute_max_ms": max(compute) if compute else None,
         "control_eligible_true": sum(1 for r in samples if r.get("control_eligible") is True),
         "turn_start_threshold": TURN_START_THRESHOLD,
+        "planner_to_mppi_latency_ms": _lat(t_plan or {"ts": t0_ts}, t_mppi),
+        "mppi_to_requested_latency_ms": _lat(t_mppi, t_req),
+        "requested_to_approved_latency_ms": _lat(t_req, t_app),
+        "approved_to_actual_latency_ms": _lat(t_app, t_act),
     }
     if late:
         report["late_turn_event"] = {

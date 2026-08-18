@@ -300,6 +300,8 @@ def enrich_trajectory_metadata(
         planner_finish_timestamp=out.get("planner_finish_timestamp"),
     )
     stale_reasons: List[str] = []
+    ineligible_reasons: List[str] = []
+    frame_id = str(out.get("frame_id") or FRAME_MAP)
     if age is not None and age > LOCAL_PLANNER_STALE_MS:
         stale_reasons.append("PLANNER_REALTIME")
         out["local_planner_stale"] = True
@@ -308,20 +310,35 @@ def enrich_trajectory_metadata(
         viz_only = True
         out["control_eligible"] = False
         out["visualization_only"] = True
+        if kind == TRAJ_KIND_HISTORICAL_RETREAT:
+            ineligible_reasons.append("HISTORY_ONLY")
+        elif kind == TRAJ_KIND_BACKWARD_FUTURE:
+            ineligible_reasons.append("REVERSE_FORBIDDEN")
+        else:
+            ineligible_reasons.append("NONE")
     if age is not None and age > max_age_ms:
         stale_reasons.append("AGE")
+        ineligible_reasons.append("STALE")
     if ae_raw is not None and ae_raw > max_shift:
         stale_reasons.append("ANCHOR")
+        ineligible_reasons.append("ANCHOR_INVALID")
+    if frame_id != FRAME_MAP:
+        eligible = False
+        out["control_eligible"] = False
+        out["visualization_only"] = True
+        ineligible_reasons.append("FRAME_INVALID")
     scene_ok = True
     if current_scene_id is not None and out.get("scene_id") is not None:
         if str(out.get("scene_id")) != str(current_scene_id):
             stale_reasons.append("SCENE")
             scene_ok = False
             out["integrity_reject"] = "TRAJECTORY_STALE_SCENE"
+            ineligible_reasons.append("SCENE_MISMATCH")
     if current_scene_id is not None and out.get("scene_id") is None:
         stale_reasons.append("SCENE")
         scene_ok = False
         out["integrity_reject"] = "TRAJECTORY_STALE_SCENE"
+        ineligible_reasons.append("SCENE_MISMATCH")
     if current_cycle_id is not None and out.get("planner_cycle_id") is not None:
         if int(out.get("planner_cycle_id") or -1) != int(current_cycle_id):
             out["cycle_mismatch"] = True
@@ -330,6 +347,7 @@ def enrich_trajectory_metadata(
             eligible = False
             out["control_eligible"] = False
             out["visualization_only"] = True
+            ineligible_reasons.append("CYCLE_MISMATCH")
     # Optional small reanchor only for valid forward future within derived shift.
     if (
         eligible
@@ -372,8 +390,22 @@ def enrich_trajectory_metadata(
             direction_angle = dm.get("direction_angle_deg")
     except Exception:
         pass
+    if direction_dot is not None and direction_dot < -0.3 and kind == TRAJ_KIND_FORWARD_FUTURE:
+        eligible = False
+        out["control_eligible"] = False
+        out["visualization_only"] = True
+        ineligible_reasons.append("DIRECTION_INVALID")
+    if out.get("valid") is False or out.get("kinematic_valid") is False:
+        eligible = False
+        out["control_eligible"] = False
+        out["visualization_only"] = True
+        ineligible_reasons.append("DYNAMICS_INVALID")
     out["control_eligible"] = bool(out.get("control_eligible"))
     out["visualization_only"] = not bool(out.get("control_eligible"))
+    ineligible_reasons = list(dict.fromkeys(ineligible_reasons))
+    out["trajectory_ineligible_reason"] = (
+        None if out["control_eligible"] else ("+".join(ineligible_reasons) if ineligible_reasons else "UNKNOWN")
+    )
     out["trajectory_is_control_eligible"] = out["control_eligible"]
     out["trajectory_is_visualization_only"] = out["visualization_only"]
     out["direction_dot"] = direction_dot
@@ -401,6 +433,7 @@ def enrich_trajectory_metadata(
         "scene_ok": scene_ok,
         "control_eligible": bool(out.get("control_eligible")),
         "integrity_reject": out.get("integrity_reject"),
+        "trajectory_ineligible_reason": out.get("trajectory_ineligible_reason"),
         "direction_dot": direction_dot,
         "direction_angle_deg": direction_angle,
         "planner_cycle_id": out.get("planner_cycle_id"),

@@ -1045,10 +1045,17 @@ class LocalMppiModel:
         except Exception:
             self.last_local_plan_result = None
 
+        lp_status = str(getattr(self.last_local_plan, "status", "") or "")
+        pt_eligible = bool(
+            isinstance(self.last_physical_trajectory, dict)
+            and self.last_physical_trajectory.get("control_eligible") is True
+        )
         track_plan = (
             authority == AUTH_ROLLING
             and self.last_local_plan is not None
             and bool(self.last_local_plan.kinematic_valid)
+            and lp_status not in ("FALLBACK", "EXPIRED", "REJECTED")
+            and pt_eligible
             and len(self.last_local_plan.poses or []) >= 2
         )
         local_xy = self.last_local_plan.as_xy() if track_plan else None

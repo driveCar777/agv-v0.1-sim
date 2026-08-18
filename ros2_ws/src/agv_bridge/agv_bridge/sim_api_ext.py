@@ -160,6 +160,20 @@ def patch_mock_state(state) -> None:
     state._global_replan_count = 0
     state._planner_inflight = False
     state._planner_lock = threading.Lock()
+    state._planner_period_s = 0.20
+    state._planner_deadline_s = 0.30
+    state._planner_inflight_count = 0
+    state._planner_timeout_count = 0
+    state._planner_drop_count = 0
+    state._planner_late_completion_count = 0
+    state._planner_apply_drop_count = 0
+    state._planner_active_job_id = 0
+    state._planner_active_job_started_at = 0.0
+    state._planner_active_job_timeout_marked = False
+    state._planner_last_completed_job_id = 0
+    state._planner_last_compute_ms = 0.0
+    state._planner_compute_samples: List[float] = []
+    state._planner_diag: Dict[str, Any] = {}
     state._global_path_revision = 0
     state._global_reference: Dict[str, Any] = {}
     state._local_candidates_layer: Dict[str, Any] = {}
@@ -420,7 +434,7 @@ def patch_mock_state(state) -> None:
                 state._ctrl_note = f"{res.control_mode}:{res.mode}"
                 state._control_mode = res.control_mode
                 state._path_i = path_i
-                state._last_local_replan = now
+                state._last_local_replan = time.time()
                 state._local_replan_count = int(state._local_replan_count) + 1
             if getattr(local_mppi, "maneuver", None):
                 state._maneuver = local_mppi.maneuver.to_telemetry()
@@ -469,6 +483,7 @@ def patch_mock_state(state) -> None:
                 state._nav_policy = tel
 
     def _run_local_planner_job(job: Dict[str, Any]) -> None:
+        job_id = int(job.get("planner_job_id") or 0)
         try:
             job_scene = int(job.get("nav_scene_id") or 0)
             cur_scene = int(getattr(state, "_nav_scene_id", 0) or 0)
@@ -502,19 +517,59 @@ def patch_mock_state(state) -> None:
             )
             local_mppi.planner_finish_timestamp = time.time()
             local_mppi._stamp_published_trajectories()
+            compute_ms = max(
+                0.0,
+                (float(local_mppi.planner_finish_timestamp or 0.0) - float(local_mppi.planner_start_timestamp or 0.0))
+                * 1000.0,
+            )
+            late = compute_ms > float(getattr(state, "_planner_deadline_s", 0.30) or 0.30) * 1000.0
+            with state._planner_lock:
+                state._planner_last_completed_job_id = job_id
+                state._planner_last_compute_ms = compute_ms
+                samples = list(getattr(state, "_planner_compute_samples", []) or [])
+                samples.append(compute_ms)
+                state._planner_compute_samples = samples[-64:]
+                if late:
+                    state._planner_late_completion_count = int(state._planner_late_completion_count) + 1
             cur_scene = int(getattr(state, "_nav_scene_id", 0) or 0)
             if job_scene and cur_scene and job_scene != cur_scene:
+                with state._planner_lock:
+                    state._planner_apply_drop_count = int(state._planner_apply_drop_count) + 1
+                return
+            if late:
+                with state._planner_lock:
+                    state._planner_apply_drop_count = int(state._planner_apply_drop_count) + 1
                 return
             _apply_local_result(res, job["now"], job["path_i"], full=job["full"])
         finally:
             with state._planner_lock:
                 state._planner_inflight = False
+                state._planner_inflight_count = 0
+                if int(getattr(state, "_planner_active_job_id", 0) or 0) == job_id:
+                    state._planner_active_job_started_at = 0.0
+                    state._planner_active_job_timeout_marked = False
 
     def _dispatch_local_planner(**job: Any) -> bool:
         with state._planner_lock:
             if state._planner_inflight:
+                started = float(getattr(state, "_planner_active_job_started_at", 0.0) or 0.0)
+                deadline_s = float(getattr(state, "_planner_deadline_s", 0.30) or 0.30)
+                now_ts = time.time()
+                if (
+                    started > 0.0
+                    and (now_ts - started) > deadline_s
+                    and not bool(getattr(state, "_planner_active_job_timeout_marked", False))
+                ):
+                    state._planner_timeout_count = int(state._planner_timeout_count) + 1
+                    state._planner_active_job_timeout_marked = True
+                state._planner_drop_count = int(state._planner_drop_count) + 1
                 return False
+            state._planner_active_job_id = int(getattr(state, "_planner_active_job_id", 0) or 0) + 1
+            job["planner_job_id"] = int(state._planner_active_job_id)
             state._planner_inflight = True
+            state._planner_inflight_count = 1
+            state._planner_active_job_started_at = time.time()
+            state._planner_active_job_timeout_marked = False
         threading.Thread(
             target=_run_local_planner_job,
             args=(job,),
@@ -2038,6 +2093,19 @@ def patch_mock_state(state) -> None:
             except Exception:
                 fp_clearance_now = None
             planner_state = str(getattr(local_mppi, "planner_state", "NORMAL") or "NORMAL")
+            stale_local_control_blocked = False
+            try:
+                pt_now = getattr(local_mppi, "last_physical_trajectory", None)
+                fp_now = getattr(local_mppi, "last_future_preview", None)
+                stale_local_control_blocked = bool(
+                    nav_mode in ("tracking", "avoid")
+                    and isinstance(pt_now, dict)
+                    and pt_now.get("control_eligible") is False
+                    and fp_now is not None
+                    and bool(getattr(fp_now, "future_collision", False))
+                )
+            except Exception:
+                stale_local_control_blocked = False
             safe_vx, safe_w, safety_reason, safe_vx_reason = apply_safety(
                 limited_vx,
                 limited_w,
@@ -2054,6 +2122,11 @@ def patch_mock_state(state) -> None:
             )
             if safety_reason != STOP_NONE:
                 stop_reason = safety_reason
+            if stale_local_control_blocked:
+                safe_vx = 0.0
+                safe_w = 0.0
+                stop_reason = STOP_SAFE
+                safe_vx_reason = "LOCAL_PLAN_STALE"
             if planner_state == NAVIGATION_FAILED:
                 safe_vx = safe_w = 0.0
                 stop_reason = STOP_NAV_FAILED
@@ -2310,6 +2383,26 @@ def patch_mock_state(state) -> None:
                 state._motion_prev_ax = rates.get("ax")
                 state._motion_prev_alpha = rates.get("alpha")
                 state._motion_prev_xy = (float(x), float(y))
+                with state._planner_lock:
+                    pcs = list(getattr(state, "_planner_compute_samples", []) or [])
+                    pcs_sorted = sorted(pcs)
+                    p95 = None
+                    if pcs_sorted:
+                        p95 = pcs_sorted[min(len(pcs_sorted) - 1, max(0, int(len(pcs_sorted) * 0.95) - 1))]
+                    state._planner_diag = {
+                        "planner_hz": 0.0 if not pcs else round(1.0 / float(getattr(state, "_planner_period_s", 0.20) or 0.20), 2),
+                        "planner_compute_ms": round(float(getattr(state, "_planner_last_compute_ms", 0.0) or 0.0), 1),
+                        "planner_compute_p50": None if not pcs_sorted else round(pcs_sorted[len(pcs_sorted) // 2], 1),
+                        "planner_compute_p95": None if p95 is None else round(float(p95), 1),
+                        "planner_compute_max": None if not pcs_sorted else round(max(pcs_sorted), 1),
+                        "planner_inflight": int(getattr(state, "_planner_inflight_count", 0) or 0),
+                        "planner_timeout_count": int(getattr(state, "_planner_timeout_count", 0) or 0),
+                        "planner_drop_count": int(getattr(state, "_planner_drop_count", 0) or 0),
+                        "planner_late_completion_count": int(getattr(state, "_planner_late_completion_count", 0) or 0),
+                        "planner_apply_drop_count": int(getattr(state, "_planner_apply_drop_count", 0) or 0),
+                        "planner_active_job_id": int(getattr(state, "_planner_active_job_id", 0) or 0),
+                        "planner_last_completed_job_id": int(getattr(state, "_planner_last_completed_job_id", 0) or 0),
+                    }
                 with state.lock:
                     state._motion = motion
                     state._limited_vx = limited_vx

@@ -238,6 +238,7 @@ def _sample_v02(client: NavLiveClient, seq: int, scene: str, setup_meta: dict) -
         "trajectory_behind_vehicle": integ.get("behind_vehicle"),
         "trajectory_stale": integ.get("stale"),
         "integrity_reject": pt.get("integrity_reject") or integ.get("integrity_reject"),
+        "trajectory_ineligible_reason": pt.get("trajectory_ineligible_reason") or integ.get("trajectory_ineligible_reason"),
         "direction_dot": pt.get("direction_dot") or integ.get("direction_dot"),
         "direction_angle": pt.get("direction_angle") or integ.get("direction_angle_deg"),
         "trajectory_reanchored": pt.get("stale_reanchor_applied") or integ.get("stale_reanchor_applied"),
@@ -285,6 +286,14 @@ def _sample_v02(client: NavLiveClient, seq: int, scene: str, setup_meta: dict) -
         "command_age_ms": _dig(nav, "motion", "turn", "command_age_ms") or _dig(nav, "turn", "command_age_ms"),
         "max_trajectory_age_ms": integ.get("max_age_ms"),
         "planner_compute_ms": integ.get("planner_compute_ms"),
+        "planner_compute_p50_ms": nav.get("planner_compute_p50"),
+        "planner_compute_p95_ms": nav.get("planner_compute_p95"),
+        "planner_compute_max_ms": nav.get("planner_compute_max"),
+        "planner_inflight": nav.get("planner_inflight"),
+        "planner_timeout_count": nav.get("planner_timeout_count"),
+        "planner_drop_count": nav.get("planner_drop_count"),
+        "planner_late_completion_count": nav.get("planner_late_completion_count"),
+        "planner_apply_drop_count": nav.get("planner_apply_drop_count"),
     }
     row["trajectory_side"] = _traj_side(row.get("direction_angle") or (pt.get("direction_angle") if pt else None))
     return row
