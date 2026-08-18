@@ -299,6 +299,13 @@ def run_side_probe(
             res.preferred_side = "LEFT"
         elif r_score > l_score + 0.08:
             res.preferred_side = "RIGHT"
+        else:
+            l_clr = float(res.best_left.min_clearance or 0.0)
+            r_clr = float(res.best_right.min_clearance or 0.0)
+            if l_clr > r_clr + 0.06:
+                res.preferred_side = "LEFT"
+            elif r_clr > l_clr + 0.06:
+                res.preferred_side = "RIGHT"
     elif res.left_valid:
         res.preferred_side = "LEFT"
     elif res.right_valid:

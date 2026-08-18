@@ -89,10 +89,14 @@ def _pillar_and_side_seal(
     *,
     block_side: str,
     prefix: str,
+    pillar_lat_m: float = 0.0,
 ) -> None:
-    """Place pillar on path; seal one lateral side (LEFT or RIGHT)."""
+    """Place pillar on path (optional lateral offset); seal one lateral side (LEFT or RIGHT)."""
+    if abs(pillar_lat_m) > 1e-6:
+        px, py = body_frame(px, py, yaw, 0.0, pillar_lat_m)
     _add_obs(client, px, py, 0.42, f"{prefix}_pillar")
-    lat_sign = 1.0 if block_side.upper() == "RIGHT" else -1.0
+    # Vehicle body frame: +lat = left (+y when yaw=0). block_side RIGHT seals vehicle right (-lat).
+    lat_sign = -1.0 if block_side.upper() == "RIGHT" else 1.0
     for i, (fwd, lat_off, r) in enumerate([(0.85, 0.85, 0.40), (1.15, 1.05, 0.38), (0.65, 0.95, 0.36)]):
         bx, by = body_frame(px, py, yaw, fwd, lat_sign * lat_off)
         _add_obs(client, bx, by, r, f"{prefix}_seal_{i}")
@@ -112,11 +116,12 @@ def _inject_at(
 
 
 def _inject_static_left_at(client: LiveClient, px: float, py: float, seg_yaw: float, prefix: str) -> None:
-    _pillar_and_side_seal(client, px, py, seg_yaw, block_side="RIGHT", prefix=prefix)
+    # Pillar biased to vehicle RIGHT so LEFT (+y) detour remains open.
+    _pillar_and_side_seal(client, px, py, seg_yaw, block_side="RIGHT", prefix=prefix, pillar_lat_m=-0.55)
 
 
 def _inject_static_right_at(client: LiveClient, px: float, py: float, seg_yaw: float, prefix: str) -> None:
-    _pillar_and_side_seal(client, px, py, seg_yaw, block_side="LEFT", prefix=prefix)
+    _pillar_and_side_seal(client, px, py, seg_yaw, block_side="LEFT", prefix=prefix, pillar_lat_m=0.55)
 
 
 def _inject_both_at(client: LiveClient, px: float, py: float, seg_yaw: float, prefix: str) -> None:
